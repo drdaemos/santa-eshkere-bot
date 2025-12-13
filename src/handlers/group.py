@@ -128,7 +128,7 @@ async def join_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception as e:
         logger.error(f"Failed to send DM to user {user_id}: {e}")
         await update.message.reply_text(
-            "Не могу отправить вам личное сообщение. Пожалуйста, начните диалог с ботом (@santa_eshkere_bot) и попробуйте снова."
+            "Не могу написать тебе в личку :( Напиши мне пожалуйста (@santa_eshkere_bot) и попробуй снова /join"
         )
 
 
