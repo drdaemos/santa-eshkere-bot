@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -187,7 +187,7 @@ async def kickitoff_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
         # Clear existing assignments for this year
         await session.execute(
-            select(Assignment).where(
+            delete(Assignment).where(
                 Assignment.group_id == group.id,
                 Assignment.event_year == event_year
             )
