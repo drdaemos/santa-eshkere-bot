@@ -51,12 +51,6 @@ async def error_handler(update: object, context) -> None:
         logger.error(f"Update that caused error: {update}")
 
 
-async def log_update(update, context) -> None:
-    """Log all incoming updates for debugging"""
-    logger.info(f"Received update: {update.update_id if update else 'None'}")
-    raise Exception("Update received and logged")
-
-
 async def handle_text_message(update, context) -> None:
     """Route text messages to appropriate handler"""
     if not update.effective_chat:
@@ -161,11 +155,6 @@ def main() -> None:
             handle_text_message
         )
     )
-
-    # Add update logger as first handler (for debugging webhook)
-    if config.USE_WEBHOOK:
-        from telegram.ext import TypeHandler
-        application.add_handler(TypeHandler(type=object, callback=log_update), group=-1)
 
     # Error handler
     application.add_error_handler(error_handler)
