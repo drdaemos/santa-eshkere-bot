@@ -32,6 +32,7 @@ async def post_init(application: Application) -> None:
     logger.info("Initializing database...")
     await init_db()
     logger.info("Database initialized")
+    logger.info(f"Bot username: @{(await application.bot.get_me()).username}")
 
 
 async def post_shutdown(application: Application) -> None:
@@ -44,6 +45,16 @@ async def post_shutdown(application: Application) -> None:
 async def error_handler(update: object, context) -> None:
     """Log errors"""
     logger.error("Exception while handling an update:", exc_info=context.error)
+
+    # In webhook mode, we need to ensure errors don't crash the server
+    if update:
+        logger.error(f"Update that caused error: {update}")
+
+
+async def log_update(update, context) -> None:
+    """Log all incoming updates for debugging"""
+    logger.info(f"Received update: {update.update_id if update else 'None'}")
+    raise Exception("Update received and logged")
 
 
 async def handle_text_message(update, context) -> None:
@@ -151,21 +162,32 @@ def main() -> None:
         )
     )
 
+    # Add update logger as first handler (for debugging webhook)
+    if config.USE_WEBHOOK:
+        from telegram.ext import TypeHandler
+        application.add_handler(TypeHandler(type=object, callback=log_update), group=-1)
+
     # Error handler
     application.add_error_handler(error_handler)
 
     # Run bot
     if config.USE_WEBHOOK:
         logger.info("Starting bot in webhook mode...")
-        logger.info(f"Webhook URL: {config.WEBHOOK_URL}")
-        logger.info(f"Port: {config.PORT}")
+        logger.info(f"Webhook URL: {config.WEBHOOK_URL}/webhook")
+        logger.info(f"Listening on: 0.0.0.0:{config.PORT}")
 
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=config.PORT,
-            url_path="/webhook",
-            webhook_url=f"{config.WEBHOOK_URL}/webhook",
-        )
+        try:
+            application.run_webhook(
+                listen="0.0.0.0",
+                port=config.PORT,
+                url_path="/webhook",
+                webhook_url=f"{config.WEBHOOK_URL}/webhook",
+                allowed_updates=["message", "callback_query"],
+                drop_pending_updates=True,
+            )
+        except Exception as e:
+            logger.error(f"Webhook failed to start: {e}", exc_info=True)
+            raise
     else:
         logger.info("Starting bot in polling mode...")
         application.run_polling(allowed_updates=["message", "callback_query"])
