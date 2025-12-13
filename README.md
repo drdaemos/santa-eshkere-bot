@@ -46,7 +46,14 @@ cp .env.example .env
 # - ADMIN_TELEGRAM_ID (from userinfobot)
 ```
 
-### 5. Run the Bot
+### 5. Run Database Migrations
+
+```bash
+# Apply database migrations
+alembic upgrade head
+```
+
+### 6. Run the Bot
 
 ```bash
 uv run python bot.py
@@ -124,7 +131,10 @@ git push origin main
    - `ADMIN_TELEGRAM_ID` - your Telegram ID
    - `USE_WEBHOOK` - set to `true`
    - `EVENT_YEAR` - current year (e.g., 2024)
-5. Railway will automatically set `DATABASE_URL`, `PORT`, and provide a public URL
+5. Configure build settings:
+   - **Build Command:** `uv sync`
+   - **Start Command:** `alembic upgrade head && uv run python bot.py`
+6. Railway will automatically set `DATABASE_URL`, `PORT`, and provide a public URL
 
 ### 3. Set Webhook URL
 
@@ -180,7 +190,12 @@ Tables:
 
 ### Database Migrations
 
-This project uses Alembic for database migrations. Migrations are automatically applied when the bot starts.
+This project uses Alembic for database migrations.
+
+**Important:** Run migrations before starting the bot:
+```bash
+alembic upgrade head
+```
 
 #### Creating New Migrations
 
@@ -191,10 +206,11 @@ When you modify the database models in `src/database/models.py`, create a new mi
 alembic revision --autogenerate -m "Description of changes"
 
 # Review the generated migration in alembic/versions/
-# Edit if needed, then the bot will apply it on next startup
+# Edit if needed, then apply it with:
+alembic upgrade head
 ```
 
-#### Manual Migration Commands
+#### Migration Commands
 
 ```bash
 # Apply all pending migrations
@@ -209,8 +225,6 @@ alembic current
 # Show migration history
 alembic history
 ```
-
-**Note:** The bot automatically runs `alembic upgrade head` on startup, so you typically don't need to run migrations manually.
 
 ## Troubleshooting
 
@@ -254,7 +268,7 @@ uv run ruff check src/
 # Create a new database migration after modifying models
 alembic revision --autogenerate -m "Description of changes"
 
-# Apply migrations manually (usually not needed as bot does this on startup)
+# Apply migrations
 alembic upgrade head
 ```
 

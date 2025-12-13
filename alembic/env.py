@@ -19,8 +19,9 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
+# Use disable_existing_loggers=False to not interfere with app's logging
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Set the database URL from environment
 config.set_main_option("sqlalchemy.url", get_database_url())
@@ -88,7 +89,19 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
-    asyncio.run(run_async_migrations())
+    try:
+        # Try to get the running event loop
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop, create a new one
+        asyncio.run(run_async_migrations())
+    else:
+        # Already in an event loop, run synchronously with run_until_complete
+        # We need to create a new loop in a thread to avoid conflicts
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(asyncio.run, run_async_migrations())
+            future.result()
 
 
 if context.is_offline_mode():
