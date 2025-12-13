@@ -1,6 +1,7 @@
 """Admin command handlers"""
 
 import logging
+import re
 from datetime import datetime
 
 from sqlalchemy import delete, func, select
@@ -14,6 +15,15 @@ from ..messages import Messages
 from ..utils.auth import require_admin, require_private_chat, require_selected_group
 
 logger = logging.getLogger(__name__)
+
+
+def escape_markdown(text: str) -> str:
+    """Escape special characters for Telegram Markdown"""
+    if not text:
+        return text
+    # Escape special Markdown characters
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return ''.join('\\' + char if char in escape_chars else char for char in text)
 
 
 @require_private_chat
@@ -615,18 +625,20 @@ async def listjoined_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if user.telegram_username:
                 user_lines.append(
                     Messages.USER_ENTRY.format(
-                        name=user.real_name,
-                        username=user.telegram_username
+                        name=escape_markdown(user.real_name),
+                        username=escape_markdown(user.telegram_username)
                     )
                 )
             else:
                 user_lines.append(
-                    Messages.USER_ENTRY_NO_USERNAME.format(name=user.real_name)
+                    Messages.USER_ENTRY_NO_USERNAME.format(
+                        name=escape_markdown(user.real_name)
+                    )
                 )
 
         await update.message.reply_text(
             Messages.LIST_JOINED.format(
-                group_name=group.group_name,
+                group_name=escape_markdown(group.group_name or ""),
                 count=len(users),
                 users_list="\n".join(user_lines)
             ),
