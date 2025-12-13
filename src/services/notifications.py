@@ -21,7 +21,8 @@ class NotificationService:
     async def send_assignment_notification(
         self,
         giver: User,
-        receiver: User
+        receiver: User,
+        group_name: str = "Неизвестная группа"
     ) -> bool:
         """
         Send assignment notification to a giver.
@@ -29,12 +30,14 @@ class NotificationService:
         Args:
             giver: User who will give the gift
             receiver: User who will receive the gift
+            group_name: Name of the group for this assignment
 
         Returns:
             True if message was sent successfully, False otherwise
         """
         try:
             message = Messages.ASSIGNMENT_NOTIFICATION.format(
+                group_name=group_name,
                 receiver_name=receiver.real_name,
                 receiver_wishlist=receiver.wishlist or "Не указан"
             )
@@ -56,13 +59,15 @@ class NotificationService:
 
     async def send_bulk_assignments(
         self,
-        assignments: Dict[User, User]
+        assignments: Dict[User, User],
+        group_name: str = "Неизвестная группа"
     ) -> Dict[int, bool]:
         """
         Send assignments to multiple users.
 
         Args:
             assignments: Dict mapping giver User to receiver User
+            group_name: Name of the group for these assignments
 
         Returns:
             Dict mapping giver telegram_id to success status
@@ -70,7 +75,7 @@ class NotificationService:
         results = {}
 
         for giver, receiver in assignments.items():
-            success = await self.send_assignment_notification(giver, receiver)
+            success = await self.send_assignment_notification(giver, receiver, group_name)
             results[giver.telegram_id] = success
 
         return results

@@ -215,7 +215,10 @@ async def kickitoff_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             for giver_id, receiver_id in assignment_pairs
         }
 
-        results = await notification_service.send_bulk_assignments(assignments_dict)
+        results = await notification_service.send_bulk_assignments(
+            assignments_dict,
+            group_name=group.group_name or "Неизвестная группа"
+        )
 
         # Report success
         success_count = sum(1 for success in results.values() if success)
