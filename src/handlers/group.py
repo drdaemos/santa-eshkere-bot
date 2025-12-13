@@ -19,13 +19,19 @@ from ..utils.auth import is_admin, require_group_chat
 logger = logging.getLogger(__name__)
 
 
-@require_group_chat
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Activate bot in a group (admin only)"""
+    """Activate bot in a group (admin only) or greet user in DM"""
     if not update.effective_chat or not update.effective_user:
         return
 
-    # Check admin
+    # Handle DM /start
+    if update.effective_chat.type == "private":
+        await update.message.reply_text(
+            "Супер, бот на связи. Напиши теперь сообщение /join в группе"
+        )
+        return
+
+    # Group chat /start - check admin
     if not is_admin(update.effective_user.id):
         await update.message.reply_text(Messages.ERROR_ADMIN_ONLY)
         return
@@ -122,7 +128,7 @@ async def join_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception as e:
         logger.error(f"Failed to send DM to user {user_id}: {e}")
         await update.message.reply_text(
-            "Не могу отправить вам личное сообщение. Пожалуйста, начните диалог с ботом (@yourbotname) и попробуйте снова."
+            "Не могу отправить вам личное сообщение. Пожалуйста, начните диалог с ботом (@santa_eshkere_bot) и попробуйте снова."
         )
 
 
