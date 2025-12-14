@@ -15,7 +15,6 @@ from telegram.ext import (
 from .config import config
 from .database.session import close_db, init_db
 from .handlers import admin, group, user
-from .utils.auth import is_admin
 
 # Configure logging
 logging.basicConfig(
@@ -56,14 +55,15 @@ async def handle_text_message(update, context) -> None:
     if not update.effective_chat:
         return
 
-    # Admin text handlers (in private chat)
-    if update.effective_chat.type == "private" and update.effective_user:
-        if is_admin(update.effective_user.id):
+    # In private chat, handle both admin and user text
+    if update.effective_chat.type == "private":
+        # Try admin handler first (for confirmation prompts, etc.)
+        # Admin handlers will check if user has selected a group and is admin of it
+        if context.user_data and "selected_group_id" in context.user_data:
             await admin.handle_admin_text(update, context)
-            return
-
-        # User text handlers
-        await user.handle_text_message(update, context)
+        else:
+            # User text handlers (registration flow, etc.)
+            await user.handle_text_message(update, context)
 
 
 def main() -> None:
@@ -72,8 +72,7 @@ def main() -> None:
         config.validate()
     except ValueError as e:
         logger.error(f"Configuration error: {e}")
-        logger.info("Please set TELEGRAM_BOT_TOKEN and ADMIN_TELEGRAM_ID environment variables")
-        logger.info("You can get your Telegram ID from @userinfobot")
+        logger.info("Please set TELEGRAM_BOT_TOKEN environment variable")
         sys.exit(1)
 
     # Create persistence

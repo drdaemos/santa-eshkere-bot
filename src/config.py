@@ -35,9 +35,6 @@ class Config:
         if not cls.TELEGRAM_BOT_TOKEN:
             raise ValueError("TELEGRAM_BOT_TOKEN is required")
 
-        if cls.ADMIN_TELEGRAM_ID == 0:
-            raise ValueError("ADMIN_TELEGRAM_ID is required")
-
         if cls.USE_WEBHOOK and not cls.WEBHOOK_URL:
             raise ValueError("WEBHOOK_URL is required when USE_WEBHOOK=true")
 

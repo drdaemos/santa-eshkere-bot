@@ -12,7 +12,7 @@ from ..config import config
 from ..database.models import Assignment, Exclusion, Group, User
 from ..database.session import get_session
 from ..messages import Messages
-from ..utils.auth import require_admin, require_private_chat, require_selected_group
+from ..utils.auth import is_chat_admin, require_private_chat, require_selected_group
 
 logger = logging.getLogger(__name__)
 
@@ -27,14 +27,22 @@ def escape_markdown(text: str) -> str:
 
 
 @require_private_chat
-@require_admin
 async def listgroups_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List all active groups"""
+    """List all active groups where user is admin"""
+    if not update.effective_user:
+        return
+
     async for session in get_session():
         result = await session.execute(
             select(Group).where(Group.is_active == True).order_by(Group.activated_at.desc())
         )
-        groups = list(result.scalars().all())
+        all_groups = list(result.scalars().all())
+
+        # Filter to only groups where user is admin
+        groups = []
+        for group in all_groups:
+            if await is_chat_admin(group.telegram_chat_id, update.effective_user.id, context.bot):
+                groups.append(group)
 
         if not groups:
             await update.message.reply_text(Messages.NO_GROUPS)
@@ -101,7 +109,6 @@ async def listgroups_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 @require_private_chat
-@require_admin
 async def selectgroup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Select a group for subsequent operations"""
     if not update.message or not context.args:
@@ -134,7 +141,7 @@ async def handle_select_group_callback(update: Update, context: ContextTypes.DEF
     query = update.callback_query
     await query.answer()
 
-    if not query.data.startswith("select_group_"):
+    if not query.data.startswith("select_group_") or not update.effective_user:
         return
 
     # Extract group ID from callback data
@@ -149,6 +156,11 @@ async def handle_select_group_callback(update: Update, context: ContextTypes.DEF
 
         if not group:
             await query.edit_message_text(Messages.ERROR_GROUP_NOT_FOUND)
+            return
+
+        # Verify user is admin of this group
+        if not await is_chat_admin(group.telegram_chat_id, update.effective_user.id, context.bot):
+            await query.edit_message_text(Messages.ERROR_ADMIN_ONLY)
             return
 
         # Store selected group
@@ -170,7 +182,6 @@ async def handle_select_group_callback(update: Update, context: ContextTypes.DEF
 
 
 @require_private_chat
-@require_admin
 @require_selected_group
 async def disband_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Disband the selected group"""
@@ -270,7 +281,6 @@ def build_user_selection_keyboard(users: list, page: int, callback_prefix: str, 
 
 
 @require_private_chat
-@require_admin
 @require_selected_group
 async def addrule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Add exclusion rule using inline keyboard with pagination"""
@@ -482,7 +492,6 @@ async def handle_addrule_second_user_callback(update: Update, context: ContextTy
 
 
 @require_private_chat
-@require_admin
 @require_selected_group
 async def listrules_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List all exclusion rules for selected group"""
@@ -534,7 +543,6 @@ async def listrules_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 @require_private_chat
-@require_admin
 @require_selected_group
 async def removerule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Remove an exclusion rule"""
@@ -599,7 +607,6 @@ async def handle_remove_rule_callback(update: Update, context: ContextTypes.DEFA
 
 
 @require_private_chat
-@require_admin
 @require_selected_group
 async def listjoined_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List all joined participants in selected group"""
@@ -647,14 +654,12 @@ async def listjoined_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 @require_private_chat
-@require_admin
 async def adminhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show admin help"""
     await update.message.reply_text(Messages.ADMIN_HELP, parse_mode="Markdown")
 
 
 @require_private_chat
-@require_admin
 @require_selected_group
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Reset assignments for selected group"""

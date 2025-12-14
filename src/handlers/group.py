@@ -14,7 +14,7 @@ from ..database.session import get_session
 from ..messages import Messages
 from ..services.assignment import AssignmentGenerator
 from ..services.notifications import NotificationService
-from ..utils.auth import is_admin, require_group_chat
+from ..utils.auth import is_group_admin, require_group_chat
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +31,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    # Group chat /start - check admin
-    if not is_admin(update.effective_user.id):
+    # Group chat /start - check if user is group admin
+    if not await is_group_admin(update, context):
         await update.message.reply_text(Messages.ERROR_ADMIN_ONLY)
         return
 
@@ -138,8 +138,8 @@ async def kickitoff_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not update.effective_chat or not update.effective_user:
         return
 
-    # Check admin
-    if not is_admin(update.effective_user.id):
+    # Check if user is group admin
+    if not await is_group_admin(update, context):
         await update.message.reply_text(Messages.ERROR_ADMIN_ONLY)
         return
 
