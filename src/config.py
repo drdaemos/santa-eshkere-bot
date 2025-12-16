@@ -17,7 +17,7 @@ class Config:
     ADMIN_TELEGRAM_ID: int = int(os.getenv("ADMIN_TELEGRAM_ID", "0"))
 
     # Database Settings
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./santa_eshkere.db")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./db/santa_eshkere.db")
 
     # Event Settings
     EVENT_YEAR: int = int(os.getenv("EVENT_YEAR", str(datetime.now().year)))

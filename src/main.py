@@ -107,6 +107,7 @@ def main() -> None:
     application.add_handler(CommandHandler("listjoined", admin.listjoined_command))
     application.add_handler(CommandHandler("adminhelp", admin.adminhelp_command))
     application.add_handler(CommandHandler("reset", admin.reset_command))
+    application.add_handler(CommandHandler("dryrunassignments", admin.dryrunassignments_command))
 
     # Callback query handlers
     application.add_handler(

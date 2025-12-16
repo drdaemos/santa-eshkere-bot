@@ -12,6 +12,7 @@ from ..config import config
 from ..database.models import Assignment, Exclusion, Group, User
 from ..database.session import get_session
 from ..messages import Messages
+from ..services.assignment import AssignmentGenerator
 from ..utils.auth import is_chat_admin, require_private_chat, require_selected_group
 
 logger = logging.getLogger(__name__)
@@ -698,6 +699,73 @@ async def handle_reset_confirmation(update: Update, context: ContextTypes.DEFAUL
 
     context.user_data.pop("pending_reset_group_id", None)
     context.user_data.pop("awaiting_reset_confirmation", None)
+
+
+@require_private_chat
+@require_selected_group
+async def dryrunassignments_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Simulate Secret Santa assignments without saving to database"""
+    group_id = context.user_data["selected_group_id"]
+
+    async for session in get_session():
+        # Get group
+        result = await session.execute(
+            select(Group).where(Group.id == group_id)
+        )
+        group = result.scalar_one_or_none()
+
+        if not group:
+            await update.message.reply_text(Messages.ERROR_GROUP_NOT_FOUND)
+            return
+
+        # Get all participants
+        result = await session.execute(
+            select(User).where(User.group_id == group_id).order_by(User.real_name)
+        )
+        participants = list(result.scalars().all())
+
+        if len(participants) < 3:
+            await update.message.reply_text(
+                "❌ Недостаточно участников для распределения. Минимум 3 участника."
+            )
+            return
+
+        # Get exclusion rules
+        result = await session.execute(
+            select(Exclusion).where(Exclusion.group_id == group_id)
+        )
+        exclusions = list(result.scalars().all())
+
+        # Generate assignments (dry run - not saved to database)
+        try:
+            assignments = AssignmentGenerator.generate_assignments(participants, exclusions)
+        except ValueError as e:
+            await update.message.reply_text(
+                f"❌ Не удалось сгенерировать распределение: {str(e)}"
+            )
+            return
+
+        # Build user ID to name mapping
+        user_map = {user.id: user.real_name for user in participants}
+
+        # Format output
+        assignment_lines = []
+        for giver_id, receiver_id in assignments:
+            giver_name = user_map.get(giver_id, "Unknown")
+            receiver_name = user_map.get(receiver_id, "Unknown")
+            assignment_lines.append(f"• {escape_markdown(giver_name)} → {escape_markdown(receiver_name)}")
+
+        response = (
+            f"**Симуляция распределения для группы: {escape_markdown(group.group_name)}**\n\n"
+            f"Участников: {len(participants)}\n"
+            f"Правил исключения: {len(exclusions)}\n\n"
+            f"**Пары (гивер → получатель):**\n"
+            f"{chr(10).join(assignment_lines)}\n\n"
+            f"_Это только симуляция. Данные не сохранены в базу._"
+        )
+
+        await update.message.reply_text(response, parse_mode="Markdown")
+        logger.info(f"Dry run assignments for group {group_id}: {len(assignments)} pairs generated")
 
 
 async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

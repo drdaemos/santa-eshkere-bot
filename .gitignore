@@ -57,4 +57,5 @@ htmlcov/
 Thumbs.db
 
 # Logs
+db/
 *.log

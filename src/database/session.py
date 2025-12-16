@@ -19,7 +19,7 @@ _async_session_maker = None
 
 def get_database_url() -> str:
     """Get database URL from environment, handling SQLite vs PostgreSQL"""
-    database_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./santa_eshkere.db")
+    database_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./db/santa_eshkere.db")
 
     # Convert PostgreSQL URL to async version if needed
     if database_url.startswith("postgresql://"):
