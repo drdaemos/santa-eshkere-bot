@@ -91,7 +91,7 @@ def run_migrations_online() -> None:
     """
     try:
         # Try to get the running event loop
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         # No running loop, create a new one
         asyncio.run(run_async_migrations())

@@ -1,137 +1,133 @@
-"""Secret Santa assignment generation algorithm"""
+"""Secret Santa draw: a random perfect matching givers -> receivers.
+
+The draw is a bipartite matching problem (giver g may give to receiver r
+unless g == r or {g, r} is excluded). Kuhn's augmenting-path algorithm finds
+a perfect matching in O(V * E) or proves none exists, so impossible rule sets
+fail instantly instead of after exploring (n-1)! arrangements. Randomness
+comes from shuffling the order of givers and of each giver's candidates.
+"""
 
 import random
-from typing import List, Tuple
+from collections.abc import Hashable, Iterable, Mapping, Sequence
+from typing import TypeVar
 
-from ..database.models import User, Exclusion
+MIN_PARTICIPANTS = 3
+
+T = TypeVar("T", bound=Hashable)
 
 
-class AssignmentGenerator:
-    """Generate Secret Santa assignments with exclusion rules"""
+class DrawError(ValueError):
+    pass
 
-    @staticmethod
-    def generate_assignments(
-        participants: List[User],
-        exclusions: List[Exclusion]
-    ) -> List[Tuple[int, int]]:
-        """
-        Generate Secret Santa assignments using backtracking algorithm.
 
-        Args:
-            participants: List of User objects who are participating
-            exclusions: List of Exclusion objects defining forbidden pairs
+class NotEnoughParticipants(DrawError):
+    pass
 
-        Returns:
-            List of (giver_id, receiver_id) tuples
 
-        Raises:
-            ValueError: If no valid assignment exists
-        """
-        if len(participants) < 3:
-            raise ValueError("Need at least 3 participants for Secret Santa")
+class ImpossibleDraw(DrawError):
+    pass
 
-        # Build forbidden pairs set (bidirectional + self)
-        forbidden = set()
 
-        # Add self-assignments as forbidden
-        for user in participants:
-            forbidden.add((user.id, user.id))
+def generate_assignments(
+    ids: Sequence[T],
+    forbidden_pairs: Iterable[tuple[T, T]] = (),
+    rng: random.Random | None = None,
+) -> list[tuple[T, T]]:
+    """Return (giver, receiver) pairs covering everyone exactly once each way.
 
-        # Add exclusion rules (bidirectional)
-        for exclusion in exclusions:
-            forbidden.add((exclusion.user1_id, exclusion.user2_id))
-            forbidden.add((exclusion.user2_id, exclusion.user1_id))
+    forbidden_pairs are unordered: (a, b) forbids a->b and b->a.
+    """
+    rng = rng or random.Random()
+    if len(ids) < MIN_PARTICIPANTS:
+        raise NotEnoughParticipants(f"need at least {MIN_PARTICIPANTS} participants")
+    if len(set(ids)) != len(ids):
+        raise ValueError("duplicate participant ids")
 
-        participant_ids = [user.id for user in participants]
+    forbidden = {frozenset(p) for p in forbidden_pairs}
+    candidates = {g: [r for r in ids if r != g and frozenset((g, r)) not in forbidden] for g in ids}
+    for options in candidates.values():
+        rng.shuffle(options)
 
-        # Use backtracking to find valid assignment
-        result = AssignmentGenerator._backtrack_assign(
-            participant_ids,
-            forbidden,
-            [],
-            set()
-        )
+    giver_of: dict[T, T] = {}  # receiver -> giver
 
-        if result is None:
-            raise ValueError(
-                "No valid assignment found. "
-                "Too many exclusion rules or impossible configuration."
-            )
-
-        return result
-
-    @staticmethod
-    def _backtrack_assign(
-        participant_ids: List[int],
-        forbidden: set,
-        current_assignment: List[Tuple[int, int]],
-        assigned_receivers: set
-    ) -> List[Tuple[int, int]] | None:
-        """
-        Recursive backtracking to build valid assignment.
-
-        Args:
-            participant_ids: List of all participant IDs
-            forbidden: Set of forbidden (giver_id, receiver_id) pairs
-            current_assignment: Current partial assignment
-            assigned_receivers: Set of receiver IDs already assigned
-
-        Returns:
-            Complete valid assignment or None if impossible
-        """
-        # Base case: all participants assigned
-        if len(current_assignment) == len(participant_ids):
-            return current_assignment
-
-        # Get next giver to assign
-        giver_id = participant_ids[len(current_assignment)]
-
-        # Try receivers in random order for variety
-        available_receivers = [
-            r for r in participant_ids
-            if r not in assigned_receivers
-        ]
-        random.shuffle(available_receivers)
-
-        for receiver_id in available_receivers:
-            # Check if this assignment is valid
-            if (giver_id, receiver_id) in forbidden:
+    def augment(giver: T, visited: set[T]) -> bool:
+        for receiver in candidates[giver]:
+            if receiver in visited:
                 continue
+            visited.add(receiver)
+            if receiver not in giver_of or augment(giver_of[receiver], visited):
+                giver_of[receiver] = giver
+                return True
+        return False
 
-            # Try this assignment
-            new_assignment = current_assignment + [(giver_id, receiver_id)]
-            new_assigned = assigned_receivers | {receiver_id}
+    order = list(ids)
+    rng.shuffle(order)
+    for giver in order:
+        if not augment(giver, set()):
+            raise ImpossibleDraw("exclusion rules leave no valid assignment")
 
-            # Recurse
-            result = AssignmentGenerator._backtrack_assign(
-                participant_ids,
-                forbidden,
-                new_assignment,
-                new_assigned
-            )
+    return [(giver, receiver) for receiver, giver in giver_of.items()]
 
-            if result is not None:
-                return result
 
-        # No valid assignment found with this path
-        return None
+# --- changing a draw that already happened ------------------------------------
+#
+# After the draw people have started shopping, so a late change must touch as
+# few Santas as possible. Both operations return {giver: new receiver} for the
+# givers whose assignment changes; everyone else keeps theirs.
 
-    @staticmethod
-    def validate_can_assign(
-        participant_count: int,
-        exclusions: List[Exclusion]
-    ) -> bool:
-        """
-        Quick validation to check if assignment is likely possible.
 
-        This is a heuristic check, not a guarantee.
-        """
-        if participant_count < 3:
-            return False
+def _allowed(giver: T, receiver: T, forbidden: set[frozenset[T]]) -> bool:
+    return giver != receiver and frozenset((giver, receiver)) not in forbidden
 
-        # Simple heuristic: if exclusions >= participants, likely impossible
-        # (This is not perfect but catches obvious cases)
-        if len(exclusions) >= participant_count:
-            return False
 
-        return True
+def repair_without(
+    pairs: Mapping[T, T],
+    leaver: T,
+    forbidden_pairs: Iterable[tuple[T, T]] = (),
+    rng: random.Random | None = None,
+) -> dict[T, T]:
+    """Changes that close the gap when `leaver` drops out of a complete draw.
+
+    The leaver's Santa (a) loses their receiver and the leaver's receiver (b)
+    loses their Santa. Preferably a gives to b (one Santa affected). If that is
+    forbidden, or a and b are the same person (a <-> leaver gave to each
+    other), one more pair c -> d is rewired: a -> d, c -> b (two Santas).
+    """
+    rng = rng or random.Random()
+    forbidden = {frozenset(p) for p in forbidden_pairs}
+    if leaver not in pairs:
+        raise ValueError("leaver is not part of the draw")
+    if len(pairs) - 1 < MIN_PARTICIPANTS:
+        raise NotEnoughParticipants(f"need at least {MIN_PARTICIPANTS} participants")
+    giver_of = {receiver: giver for giver, receiver in pairs.items()}
+    a, b = giver_of[leaver], pairs[leaver]
+    if a != b and _allowed(a, b, forbidden):
+        return {a: b}
+    options = [
+        (c, d)
+        for c, d in pairs.items()
+        if c not in (a, leaver) and _allowed(a, d, forbidden) and _allowed(c, b, forbidden)
+    ]
+    if not options:
+        raise ImpossibleDraw("no small repair respects the exclusion rules")
+    c, d = rng.choice(options)
+    return {a: d, c: b}
+
+
+def splice_in(
+    pairs: Mapping[T, T],
+    newcomer: T,
+    forbidden_pairs: Iterable[tuple[T, T]] = (),
+    rng: random.Random | None = None,
+) -> dict[T, T]:
+    """Changes that add `newcomer` to a complete draw: some c -> d becomes
+    c -> newcomer -> d, so exactly one existing Santa (c) is affected."""
+    rng = rng or random.Random()
+    forbidden = {frozenset(p) for p in forbidden_pairs}
+    if newcomer in pairs:
+        raise ValueError("newcomer is already part of the draw")
+    options = [(c, d) for c, d in pairs.items() if _allowed(c, newcomer, forbidden) and _allowed(newcomer, d, forbidden)]
+    if not options:
+        raise ImpossibleDraw("exclusion rules leave no place for the newcomer")
+    c, d = rng.choice(options)
+    return {c: newcomer, newcomer: d}

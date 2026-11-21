@@ -19,13 +19,7 @@ A Telegram bot for organizing company Secret Santa with exclusion rules (e.g., s
 2. Send `/newbot` and follow the instructions
 3. Save the bot token you receive
 
-### 2. Get Your Telegram ID
-
-1. Talk to [@userinfobot](https://t.me/userinfobot) on Telegram
-2. Send any message and it will reply with your user ID
-3. Save this ID - you'll need it as the admin ID
-
-### 3. Install Dependencies
+### 2. Install Dependencies
 
 ```bash
 # Install uv if you don't have it
@@ -35,25 +29,23 @@ pip install uv
 uv sync
 ```
 
-### 4. Configure Environment
+### 3. Configure Environment
 
 ```bash
 # Copy the example environment file
 cp .env.example .env
 
-# Edit .env and add your values:
-# - TELEGRAM_BOT_TOKEN (from BotFather)
-# - ADMIN_TELEGRAM_ID (from userinfobot)
+# Edit .env and set TELEGRAM_BOT_TOKEN (from BotFather)
 ```
 
-### 5. Run Database Migrations
+### 4. Run Database Migrations
 
 ```bash
 # Apply database migrations
 alembic upgrade head
 ```
 
-### 6. Run the Bot
+### 5. Run the Bot
 
 ```bash
 uv run python bot.py
@@ -94,21 +86,44 @@ The bot will start in polling mode using SQLite database for local development.
 3. **Check status:**
    - Send `/status` in DM to see your registration and assignment
 
+4. **Leave:**
+   - Send `/leave` in DM
+
+### Changes after the draw
+
+People have usually started shopping by then, so the bot never reshuffles
+everyone:
+- **Someone leaves** (`/leave`, or an admin's `/removeparticipant`): their
+  Santa now gives to the leaver's receiver. If a rule forbids that pair, one
+  more pair is rewired, so at most two Santas get a new assignment. If no such
+  small fix exists, or fewer than 3 people would remain, the bot refuses and
+  points to `/reset`.
+- **Someone joins late** (`/join` works after the draw): one link A → B
+  becomes A → newcomer → B. A gets a new assignment and the newcomer gets B.
+- Only Santas whose assignment changed get a DM. The group sees who left,
+  never who gives to whom.
+
 ## Admin Commands
 
+Admins are the Telegram admins of each group; rights are re-checked with
+Telegram on every command and button press.
+
 ### In Group Chat
-- `/start` - Activate bot (admin only)
-- `/kickitoff` - Generate and send assignments (admin only)
+- `/start` - Activate bot (admin only); opens a season if none is running
+- `/kickitoff` - Draw and send assignments (admin only; refuses to reshuffle a drawn season)
+- `/newseason` - Close the current season and open a new one (admin only, asks to confirm)
 
 ### In DM with Bot
 - `/listgroups` - List all active groups
-- `/selectgroup <number>` - Select a group for management
+- `/selectgroup <number>` - Select a group for management (or tap its button in `/listgroups`)
 - `/addrule` - Add exclusion rule
 - `/listrules` - Show exclusion rules
 - `/removerule` - Remove an exclusion rule
 - `/listjoined` - Show all participants
+- `/removeparticipant` - Remove someone from the season (repairs the draw)
 - `/disband` - Deactivate the selected group
-- `/reset` - Clear assignments (caution!)
+- `/dryrunassignments` - Preview a draw without saving it
+- `/reset` - Clear this season's assignments (caution!)
 - `/adminhelp` - Show all commands
 
 ## Deployment to Railway
@@ -128,13 +143,12 @@ git push origin main
 3. Add PostgreSQL plugin
 4. Add environment variables:
    - `TELEGRAM_BOT_TOKEN` - your bot token
-   - `ADMIN_TELEGRAM_ID` - your Telegram ID
    - `USE_WEBHOOK` - set to `true`
-   - `EVENT_YEAR` - current year (e.g., 2024)
-5. Configure build settings:
-   - **Build Command:** `uv sync`
-   - **Start Command:** `alembic upgrade head && uv run python bot.py`
-6. Railway will automatically set `DATABASE_URL`, `PORT`, and provide a public URL
+   - `DATABASE_URL` - reference the Postgres service's `DATABASE_URL`
+5. Build, start and healthcheck settings come from [railway.toml](railway.toml):
+   migrations run as the pre-deploy step, and Railway only switches traffic to
+   a new deploy once `GET /health` answers 200 (bot started, webhook set,
+   database reachable).
 
 ### 3. Set Webhook URL
 
@@ -151,6 +165,7 @@ santa-eshkere-bot/
 │   ├── __init__.py
 │   ├── __main__.py          # Allows python -m src
 │   ├── main.py              # Entry point
+│   ├── web.py               # Webhook + /health HTTP server (webhook mode)
 │   ├── config.py            # Configuration
 │   ├── messages.py          # Russian messages
 │   ├── database/
@@ -183,10 +198,15 @@ santa-eshkere-bot/
 - **Production:** PostgreSQL (Railway provides this automatically)
 
 Tables:
-- `groups` - Telegram groups where bot is activated
-- `users` - Participants in each group
-- `exclusions` - Rules for who can't be matched together
-- `assignments` - Secret Santa assignments by year
+- `groups` - Telegram groups where the bot is activated
+- `events` - seasons per group: `open` -> `drawn` -> `closed` (one current season per group)
+- `participants` - people in one season (every season starts empty; returning
+  players can reuse last season's name and wishlist in one tap)
+- `exclusions` - "never pair these two", per group, keyed by Telegram user id,
+  so they carry over between seasons
+- `assignments` - giver -> receiver within a season
+- `dm_states` - pending DM conversation step and selected admin group (in the
+  DB so a redeploy never loses someone mid-registration)
 
 ### Database Migrations
 
@@ -236,8 +256,11 @@ alembic history
 
 ### Can't send DM to users
 
-- Users must start a conversation with the bot first
-- Tell users to search for your bot and send `/start` before joining
+- Telegram only lets a bot DM people who opened a chat with it. On `/join`
+  the bot replies in the group with a button that opens the DM and resumes
+  registration.
+- After `/kickitoff` the group gets a list of anyone who could not be reached;
+  they can open the bot and use `/status` to see their assignment.
 
 ### Assignment generation fails
 
@@ -250,13 +273,59 @@ alembic history
 - Check `DATABASE_URL` is set correctly
 - For Railway, ensure PostgreSQL plugin is added
 
+## Testing
+
+Everything runs against a **fake Telegram**: `tests/harness/fake_bot_api.py`
+models users, chats and memberships and enforces the server rules real users
+trip over: Markdown/HTML entity parsing, the 4096-char limit, "bot can't
+initiate conversation", blocked users, "message is not modified", 64-byte
+callback data. Scenarios read like chat transcripts:
+
+```python
+await alice.send(office, "/join")
+await alice.dm("Алиса")
+await admin.click(admin.last_dm, "Алиса")
+await world.harness.restart()
+```
+
+Two layers share that DSL:
+
+| Layer | Where | What it proves |
+|---|---|---|
+| in-process (`tests/flows`, most tests) | real `Application`, fake HTTP transport | every flow and edge case, fast (~20 s for ~270 tests) |
+| process e2e (`tests/e2e`, marker `e2e`) | `bot.py` as its own OS process, talking HTTP to `tests/harness/server.py` | deploy-shaped startup (pre-deploy command from `railway.toml`, env-only config), polling and webhook modes, webhook secret enforcement, the `/health` endpoint Railway checks, surviving a killed process |
+
+```bash
+uv run pytest                 # everything on SQLite (~60 s)
+uv run pytest -m "not e2e"    # fast loop
+uv run pytest -m e2e          # just the process-level journeys
+```
+
+**Against Postgres** (what production runs, including the migration's
+Postgres-only branch). Without Docker, start a throwaway server:
+
+```bash
+uv run --no-project --python 3.12 --with pgserver scripts/local_postgres.py
+```
+
+then run the suite with the printed `TEST_DATABASE_URL=...` set. The test
+database is wiped per test, so never point it at real data.
+
+CI (`.github/workflows/tests.yml`) runs lint and the full suite on SQLite and
+on Postgres 17 for every push (any branch) and every PR.
+
+Tests marked `known_bug` are strict xfails for reproduced-but-unfixed bugs;
+when a fix makes one pass, the run fails until the marker is removed.
+
+On Windows set `PYTHONUTF8=1` if you print Russian text from tests.
+
 ## Development
 
 ```bash
 # Run in development mode
 uv run python bot.py
 
-# Run tests (when added)
+# Run tests
 uv run pytest
 
 # Format code

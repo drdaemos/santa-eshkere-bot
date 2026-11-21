@@ -1,795 +1,561 @@
-"""Admin command handlers"""
+"""Admin DM commands and every inline-button callback.
+
+Callbacks are stateless: each button carries the ids it acts on
+(validation.callback). Because callback data is client input, every callback
+re-checks that the clicking user is currently an admin of the group the ids
+belong to, and that the ids belong together.
+"""
 
 import logging
-import re
-from datetime import datetime
 
-from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from ..config import config
-from ..database.models import Assignment, Exclusion, Group, User
-from ..database.session import get_session
+from ..database.models import Event, EventStatus, Exclusion, Group, Participant
+from ..database.session import session_scope
+from ..formatting import Safe, join, render, truncate
 from ..messages import Messages
-from ..services.assignment import AssignmentGenerator
-from ..utils.auth import is_chat_admin, require_private_chat, require_selected_group
+from ..services import seasons, state
+from ..services.assignment import ImpossibleDraw, NotEnoughParticipants
+from ..services.notifications import deliver, post, reassignment_notices, send_dm
+from ..utils.auth import is_chat_admin, require_private_chat
+from ..validation import CONFIRM_ACTIONS, CONFIRM_CODES, ValidationError, callback, parse_callback, parse_index
+from . import registration, user
 
 logger = logging.getLogger(__name__)
 
+PAGE_SIZE = 8
 
-def escape_markdown(text: str) -> str:
-    """Escape special characters for Telegram Markdown"""
-    if not text:
-        return text
-    # Escape special Markdown characters
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return ''.join('\\' + char if char in escape_chars else char for char in text)
+
+async def _reply(update: Update, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
+    assert update.effective_message is not None
+    await update.effective_message.reply_text(Safe(text), reply_markup=markup)
+
+
+def _confirm_markup(action: str, group_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[
+            InlineKeyboardButton(Messages.CONFIRM_YES_BUTTON, callback_data=callback("cf", CONFIRM_CODES[action], group_id)),
+            InlineKeyboardButton(Messages.CONFIRM_NO_BUTTON, callback_data=callback("cx")),
+        ]]
+    )
+
+
+async def _admin_groups(s: AsyncSession, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> list[Group]:
+    return [g for g in await seasons.active_groups(s) if await is_chat_admin(g.telegram_chat_id, user_id, context.bot)]
+
+
+async def _selected_group(s: AsyncSession, update: Update, context: ContextTypes.DEFAULT_TYPE) -> Group | None:
+    """The admin's selected group, re-verifying admin rights; replies on failure."""
+    user = update.effective_user
+    assert user is not None
+    group_id = await state.selected_group_id(s, user.id)
+    if group_id is None:
+        await _reply(update, Messages.ERROR_NO_GROUP_SELECTED)
+        return None
+    group = await seasons.get_group(s, group_id)
+    if group is None:
+        await _reply(update, Messages.ERROR_GROUP_NOT_FOUND)
+        return None
+    if not await is_chat_admin(group.telegram_chat_id, user.id, context.bot):
+        await _reply(update, Messages.ERROR_ADMIN_ONLY)
+        return None
+    return group
+
+
+async def _selected_event(s: AsyncSession, update: Update, context: ContextTypes.DEFAULT_TYPE) -> tuple[Group, Event] | None:
+    group = await _selected_group(s, update, context)
+    if group is None:
+        return None
+    event = await seasons.current_event(s, group.id)
+    if event is None:
+        await _reply(update, Messages.NO_SEASON)
+        return None
+    return group, event
+
+
+def _person_label(p: Participant) -> str:
+    return f"{p.real_name} (@{p.telegram_username})" if p.telegram_username else p.real_name
+
+
+def _people_keyboard(people: list[Participant], page: int, pick: object, nav: object) -> InlineKeyboardMarkup:
+    """Paginated people picker. pick(pid) / nav(page) build callback data."""
+    pages = max(1, (len(people) + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = min(max(page, 0), pages - 1)
+    rows = [
+        [InlineKeyboardButton(truncate(_person_label(p), 60), callback_data=pick(p.id))]  # type: ignore[operator]
+        for p in people[page * PAGE_SIZE : (page + 1) * PAGE_SIZE]
+    ]
+    if pages > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("← Назад", callback_data=nav(page - 1)))  # type: ignore[operator]
+        nav_row.append(InlineKeyboardButton(f"· {page + 1}/{pages} ·", callback_data=callback("noop")))
+        if page < pages - 1:
+            nav_row.append(InlineKeyboardButton("Вперёд →", callback_data=nav(page + 1)))  # type: ignore[operator]
+        rows.append(nav_row)
+    return InlineKeyboardMarkup(rows)
+
+
+# --- commands -----------------------------------------------------------------
 
 
 @require_private_chat
 async def listgroups_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List all active groups where user is admin"""
-    if not update.effective_user:
-        return
-
-    async for session in get_session():
-        result = await session.execute(
-            select(Group).where(Group.is_active == True).order_by(Group.activated_at.desc())
-        )
-        all_groups = list(result.scalars().all())
-
-        # Filter to only groups where user is admin
-        groups = []
-        for group in all_groups:
-            if await is_chat_admin(group.telegram_chat_id, update.effective_user.id, context.bot):
-                groups.append(group)
-
+    user = update.effective_user
+    assert user is not None
+    async with session_scope() as s:
+        groups = await _admin_groups(s, context, user.id)
         if not groups:
-            await update.message.reply_text(Messages.NO_GROUPS)
+            await _reply(update, Messages.NO_GROUPS)
             return
-
-        group_lines = []
-        event_year = config.EVENT_YEAR
-
-        for idx, group in enumerate(groups, 1):
-            # Count participants
-            result = await session.execute(
-                select(func.count(User.id)).where(User.group_id == group.id)
-            )
-            participant_count = result.scalar() or 0
-
-            # Check if assignments sent
-            result = await session.execute(
-                select(func.count(Assignment.id)).where(
-                    Assignment.group_id == group.id,
-                    Assignment.event_year == event_year
-                )
-            )
-            assignment_count = result.scalar() or 0
-
-            assignment_status = (
-                Messages.ASSIGNMENT_STATUS_SENT
-                if assignment_count > 0
-                else Messages.ASSIGNMENT_STATUS_NOT_SENT
-            )
-
-            group_lines.append(
-                Messages.GROUP_LIST_ENTRY.format(
-                    index=idx,
-                    group_name=group.group_name or "Unnamed",
+        entries = []
+        for index, group in enumerate(groups, 1):
+            event = await seasons.current_event(s, group.id)
+            count = await seasons.participant_count(s, event.id) if event else 0
+            drawn = event is not None and event.status == EventStatus.DRAWN
+            entries.append(
+                render(
+                    Messages.GROUP_LIST_ENTRY,
+                    index=index,
+                    group_name=group.title,
                     chat_id=group.telegram_chat_id,
                     activated_at=group.activated_at.strftime("%Y-%m-%d"),
-                    participants=participant_count,
-                    assignment_status=assignment_status
+                    participants=count,
+                    assignment_status=Messages.ASSIGNMENT_STATUS_SENT if drawn else Messages.ASSIGNMENT_STATUS_NOT_SENT,
                 )
             )
-
-        # Store groups in context for selectgroup
-        context.user_data["available_groups"] = [
-            {"id": g.id, "name": g.group_name} for g in groups
-        ]
-
-        # Create inline keyboard with group selection buttons
-        keyboard = []
-        for idx, group in enumerate(groups):
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"✅ {group.group_name or 'Unnamed'}",
-                    callback_data=f"select_group_{group.id}"
-                )
-            ])
-
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await update.message.reply_text(
-            Messages.LIST_GROUPS.format(groups_list="\n\n".join(group_lines)),
-            parse_mode="Markdown",
-            reply_markup=reply_markup
+        markup = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(truncate(f"✅ {g.title}", 60), callback_data=callback("sg", g.id))] for g in groups]
         )
+    await _reply(update, render(Messages.LIST_GROUPS, groups_list=join(entries, sep="\n\n")), markup)
 
 
 @require_private_chat
 async def selectgroup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Select a group for subsequent operations"""
-    if not update.message or not context.args:
-        await update.message.reply_text("Использование: /selectgroup <номер>")
+    user = update.effective_user
+    assert user is not None
+    async with session_scope() as s:
+        groups = await _admin_groups(s, context, user.id)
+        try:
+            group = groups[parse_index(context.args or [], len(groups))]
+        except ValidationError as e:
+            await _reply(update, render(Messages.INVALID_INPUT, reason=f"Неправильный формат. {e}"))
+            return
+        await state.select_group(s, user.id, group.id)
+        await _reply(update, render(Messages.GROUP_SELECTED, group_name=group.title))
+
+
+@require_private_chat
+async def listjoined_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with session_scope() as s:
+        selected = await _selected_event(s, update, context)
+        if selected is None:
+            return
+        group, event = selected
+        people = sorted(await seasons.participants(s, event.id), key=lambda p: p.joined_at)
+    if not people:
+        await _reply(update, Messages.NO_PARTICIPANTS)
         return
+    lines = [
+        render(Messages.USER_ENTRY, name=p.real_name, username=p.telegram_username)
+        if p.telegram_username
+        else render(Messages.USER_ENTRY_NO_USERNAME, name=p.real_name)
+        for p in people
+    ]
+    await _reply(update, render(Messages.LIST_JOINED, group_name=group.title, count=len(people), users_list=join(lines)))
 
-    try:
-        group_index = int(context.args[0]) - 1
-    except (ValueError, IndexError):
-        await update.message.reply_text(Messages.ERROR_INVALID_INPUT)
+
+@require_private_chat
+async def removeparticipant_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with session_scope() as s:
+        selected = await _selected_event(s, update, context)
+        if selected is None:
+            return
+        _, event = selected
+        people = await seasons.participants(s, event.id)
+    if not people:
+        await _reply(update, Messages.NO_PARTICIPANTS)
         return
+    await _reply(update, Messages.REMOVE_PARTICIPANT_SELECT, _removal_keyboard(event.id, people, 0))
 
-    available_groups = context.user_data.get("available_groups", [])
 
-    if group_index < 0 or group_index >= len(available_groups):
-        await update.message.reply_text(Messages.ERROR_INVALID_INPUT)
+def _removal_keyboard(event_id: int, people: list[Participant], page: int) -> InlineKeyboardMarkup:
+    return _people_keyboard(people, page, lambda pid: callback("pr", event_id, pid), lambda pg: callback("pp", event_id, pg))
+
+
+@require_private_chat
+async def addrule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with session_scope() as s:
+        selected = await _selected_event(s, update, context)
+        if selected is None:
+            return
+        _, event = selected
+        people = await seasons.participants(s, event.id)
+    if len(people) < 2:
+        await _reply(update, Messages.ADDRULE_NOT_ENOUGH)
         return
+    markup = _people_keyboard(people, 0, lambda pid: callback("rf", event.id, pid), lambda page: callback("ra", event.id, page))
+    await _reply(update, Messages.ADDRULE_SELECT_FIRST, markup)
 
-    selected_group = available_groups[group_index]
-    context.user_data["selected_group_id"] = selected_group["id"]
 
-    await update.message.reply_text(
-        Messages.GROUP_SELECTED.format(group_name=selected_group["name"]),
-        parse_mode="Markdown"
+async def _rule_lines(s: AsyncSession, group: Group, rules: list[Exclusion]) -> list[tuple[Exclusion, str]]:
+    names = await seasons.known_names(s, group.id)
+    event = await seasons.current_event(s, group.id)
+    in_season = {p.telegram_id for p in await seasons.participants(s, event.id)} if event else set()
+
+    def label(telegram_id: int) -> str:
+        name = names.get(telegram_id, str(telegram_id))
+        return name if telegram_id in in_season else name + Messages.RULE_NOT_IN_SEASON
+
+    return [(r, f"{label(r.telegram_id_a)} ↔ {label(r.telegram_id_b)}") for r in rules]
+
+
+@require_private_chat
+async def listrules_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with session_scope() as s:
+        group = await _selected_group(s, update, context)
+        if group is None:
+            return
+        rules = await _rule_lines(s, group, await seasons.group_rules(s, group.id))
+    if not rules:
+        await _reply(update, Messages.NO_RULES)
+        return
+    lines = [render("• {rule}", rule=text) for _, text in rules]
+    await _reply(update, render(Messages.LIST_RULES, group_name=group.title, rules_list=join(lines), count=len(rules)))
+
+
+@require_private_chat
+async def removerule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with session_scope() as s:
+        group = await _selected_group(s, update, context)
+        if group is None:
+            return
+        rules = await _rule_lines(s, group, await seasons.group_rules(s, group.id))
+    if not rules:
+        await _reply(update, Messages.NO_RULES)
+        return
+    markup = InlineKeyboardMarkup(
+        [[InlineKeyboardButton(truncate(text, 60), callback_data=callback("rr", rule.id))] for rule, text in rules]
+    )
+    await _reply(update, Messages.REMOVE_RULE_SELECT, markup)
+
+
+@require_private_chat
+async def dryrun_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with session_scope() as s:
+        selected = await _selected_event(s, update, context)
+        if selected is None:
+            return
+        group, event = selected
+        try:
+            pairs, rule_count = await seasons.plan_draw(s, event)
+        except NotEnoughParticipants:
+            await _reply(update, Messages.ERROR_NOT_ENOUGH_PARTICIPANTS)
+            return
+        except ImpossibleDraw:
+            await _reply(update, Messages.ERROR_ASSIGNMENT_IMPOSSIBLE)
+            return
+    lines = [render(Messages.DRY_RUN_PAIR, giver=g.real_name, receiver=r.real_name) for g, r in sorted(pairs, key=lambda p: p[0].real_name)]
+    await _reply(
+        update,
+        render(Messages.DRY_RUN, group_name=group.title, participants=len(pairs), rules=rule_count, pairs=join(lines)),
     )
 
 
-async def handle_select_group_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle group selection from inline keyboard"""
-    query = update.callback_query
-    await query.answer()
-
-    if not query.data.startswith("select_group_") or not update.effective_user:
+@require_private_chat
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with session_scope() as s:
+        selected = await _selected_event(s, update, context)
+        if selected is None:
+            return
+        group, event = selected
+    if event.status != EventStatus.DRAWN:
+        await _reply(update, Messages.RESET_NOTHING)
         return
-
-    # Extract group ID from callback data
-    group_id = int(query.data.replace("select_group_", ""))
-
-    # Get group name from database
-    async for session in get_session():
-        result = await session.execute(
-            select(Group).where(Group.id == group_id)
-        )
-        group = result.scalar_one_or_none()
-
-        if not group:
-            await query.edit_message_text(Messages.ERROR_GROUP_NOT_FOUND)
-            return
-
-        # Verify user is admin of this group
-        if not await is_chat_admin(group.telegram_chat_id, update.effective_user.id, context.bot):
-            await query.edit_message_text(Messages.ERROR_ADMIN_ONLY)
-            return
-
-        # Store selected group
-        context.user_data["selected_group_id"] = group_id
-
-        # Update message to show selection
-        await query.edit_message_text(
-            f"✓ Выбрана группа: **{group.group_name}**\n\n"
-            f"Используйте команды для управления этой группой:\n"
-            f"/addrule - Добавить правило исключения\n"
-            f"/listrules - Показать правила\n"
-            f"/listjoined - Список участников\n"
-            f"/disband - Расформировать группу\n"
-            f"/reset - Сбросить распределения",
-            parse_mode="Markdown"
-        )
-
-        logger.info(f"Admin selected group {group_id}")
+    await _reply(update, render(Messages.RESET_CONFIRM, group_name=group.title), _confirm_markup("reset", group.id))
 
 
 @require_private_chat
-@require_selected_group
 async def disband_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Disband the selected group"""
-    group_id = context.user_data["selected_group_id"]
-
-    async for session in get_session():
-        result = await session.execute(
-            select(Group).where(Group.id == group_id)
-        )
-        group = result.scalar_one_or_none()
-
-        if not group:
-            await update.message.reply_text(Messages.ERROR_GROUP_NOT_FOUND)
+    async with session_scope() as s:
+        group = await _selected_group(s, update, context)
+        if group is None:
             return
-
-        # Ask for confirmation
-        context.user_data["pending_disband_group_id"] = group_id
-        context.user_data["awaiting_disband_confirmation"] = True
-
-        await update.message.reply_text(
-            Messages.DISBAND_CONFIRM.format(group_name=group.group_name),
-            parse_mode="Markdown"
-        )
-
-
-async def handle_disband_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle disband confirmation"""
-    if not update.message:
-        return
-
-    response = update.message.text.lower().strip()
-    group_id = context.user_data.get("pending_disband_group_id")
-
-    if response == Messages.CONFIRM_YES:
-        async for session in get_session():
-            result = await session.execute(
-                select(Group).where(Group.id == group_id)
-            )
-            group = result.scalar_one_or_none()
-
-            if group:
-                group.is_active = False
-                group.disbanded_at = datetime.now()
-                await session.commit()
-
-                await update.message.reply_text(Messages.GROUP_DISBANDED)
-                logger.info(f"Group {group_id} disbanded")
-    else:
-        await update.message.reply_text("Отменено.")
-
-    context.user_data.pop("pending_disband_group_id", None)
-    context.user_data.pop("awaiting_disband_confirmation", None)
-
-
-def build_user_selection_keyboard(users: list, page: int, callback_prefix: str, users_per_page: int = 8):
-    """Build paginated keyboard for user selection"""
-    total_pages = (len(users) + users_per_page - 1) // users_per_page
-    start_idx = page * users_per_page
-    end_idx = min(start_idx + users_per_page, len(users))
-
-    keyboard = []
-
-    # Add user buttons for current page
-    for user in users[start_idx:end_idx]:
-        username_text = f" (@{user.telegram_username})" if user.telegram_username else ""
-        keyboard.append([
-            InlineKeyboardButton(
-                f"{user.real_name}{username_text}",
-                callback_data=f"{callback_prefix}{user.id}"
-            )
-        ])
-
-    # Add navigation buttons if needed
-    if total_pages > 1:
-        nav_buttons = []
-
-        # Previous button
-        if page > 0:
-            nav_buttons.append(
-                InlineKeyboardButton("← Назад", callback_data=f"addrule_page_{callback_prefix}{page - 1}")
-            )
-
-        # Page indicator
-        nav_buttons.append(
-            InlineKeyboardButton(f"· {page + 1}/{total_pages} ·", callback_data="addrule_noop")
-        )
-
-        # Next button
-        if page < total_pages - 1:
-            nav_buttons.append(
-                InlineKeyboardButton("Вперёд →", callback_data=f"addrule_page_{callback_prefix}{page + 1}")
-            )
-
-        keyboard.append(nav_buttons)
-
-    return InlineKeyboardMarkup(keyboard)
-
-
-@require_private_chat
-@require_selected_group
-async def addrule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Add exclusion rule using inline keyboard with pagination"""
-    group_id = context.user_data["selected_group_id"]
-
-    # Get all registered users in this group
-    async for session in get_session():
-        result = await session.execute(
-            select(User).where(User.group_id == group_id).order_by(User.real_name)
-        )
-        users = list(result.scalars().all())
-
-        if len(users) < 2:
-            await update.message.reply_text(
-                "❌ В группе недостаточно участников для создания правил исключения (минимум 2)."
-            )
-            return
-
-        # Store users list for pagination
-        context.user_data["addrule_all_users"] = [
-            {"id": u.id, "name": u.real_name, "username": u.telegram_username}
-            for u in users
-        ]
-
-        # Build paginated keyboard
-        reply_markup = build_user_selection_keyboard(users, 0, "addrule_first_")
-
-        await update.message.reply_text(
-            "Выберите первого человека:",
-            reply_markup=reply_markup
-        )
-
-
-async def handle_addrule_page_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle pagination for user selection"""
-    query = update.callback_query
-    await query.answer()
-
-    if not query.data.startswith("addrule_page_"):
-        return
-
-    # Parse callback data: addrule_page_addrule_first_2 or addrule_page_addrule_second_1
-    parts = query.data.replace("addrule_page_", "").split("_")
-    callback_prefix = f"{parts[0]}_{parts[1]}_"  # e.g., "addrule_first_"
-    page = int(parts[2])
-
-    group_id = context.user_data.get("selected_group_id")
-    all_users = context.user_data.get("addrule_all_users", [])
-
-    if not all_users:
-        await query.edit_message_text("❌ Ошибка: список пользователей потерян.")
-        return
-
-    # Rebuild User objects from stored data
-    async for session in get_session():
-        user_ids = [u["id"] for u in all_users]
-        result = await session.execute(
-            select(User).where(User.id.in_(user_ids))
-        )
-        users_dict = {u.id: u for u in result.scalars().all()}
-
-        # Filter if selecting second user
-        if callback_prefix == "addrule_second_":
-            first_user_id = context.user_data.get("addrule_first_user_id")
-            users = [users_dict[u["id"]] for u in all_users if u["id"] != first_user_id and u["id"] in users_dict]
-        else:
-            users = [users_dict[u["id"]] for u in all_users if u["id"] in users_dict]
-
-        # Build paginated keyboard
-        reply_markup = build_user_selection_keyboard(users, page, callback_prefix)
-
-        # Update message based on selection stage
-        if callback_prefix == "addrule_first_":
-            text = "Выберите первого человека:"
-        else:
-            first_name = context.user_data.get("addrule_first_user_name", "")
-            text = f"Выбран: **{first_name}**\n\nТеперь выберите второго человека:"
-
-        await query.edit_message_text(
-            text,
-            parse_mode="Markdown",
-            reply_markup=reply_markup
-        )
-
-
-async def handle_addrule_first_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle first user selection for exclusion rule"""
-    query = update.callback_query
-    await query.answer()
-
-    if not query.data.startswith("addrule_first_"):
-        return
-
-    # Extract user ID from callback data
-    first_user_id = int(query.data.replace("addrule_first_", ""))
-    group_id = context.user_data.get("selected_group_id")
-
-    async for session in get_session():
-        # Get first user details
-        result = await session.execute(
-            select(User).where(User.id == first_user_id)
-        )
-        first_user = result.scalar_one_or_none()
-
-        if not first_user:
-            await query.edit_message_text("❌ Пользователь не найден.")
-            return
-
-        # Store first user
-        context.user_data["addrule_first_user_id"] = first_user_id
-        context.user_data["addrule_first_user_name"] = first_user.real_name
-
-        # Get all users except the first one
-        result = await session.execute(
-            select(User).where(
-                User.group_id == group_id,
-                User.id != first_user_id
-            ).order_by(User.real_name)
-        )
-        users = list(result.scalars().all())
-
-        # Build paginated keyboard for second user
-        reply_markup = build_user_selection_keyboard(users, 0, "addrule_second_")
-
-        await query.edit_message_text(
-            f"Выбран: **{first_user.real_name}**\n\nТеперь выберите второго человека:",
-            parse_mode="Markdown",
-            reply_markup=reply_markup
-        )
-
-
-async def handle_addrule_second_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle second user selection for exclusion rule"""
-    query = update.callback_query
-    await query.answer()
-
-    if not query.data.startswith("addrule_second_"):
-        return
-
-    # Extract user ID from callback data
-    second_user_id = int(query.data.replace("addrule_second_", ""))
-    first_user_id = context.user_data.get("addrule_first_user_id")
-    first_user_name = context.user_data.get("addrule_first_user_name")
-    group_id = context.user_data.get("selected_group_id")
-
-    if not first_user_id or not group_id:
-        await query.edit_message_text("❌ Ошибка: потеряны данные первого пользователя.")
-        return
-
-    async for session in get_session():
-        # Get second user details
-        result = await session.execute(
-            select(User).where(User.id == second_user_id)
-        )
-        second_user = result.scalar_one_or_none()
-
-        if not second_user:
-            await query.edit_message_text("❌ Пользователь не найден.")
-            return
-
-        # Canonical ordering
-        user1_id = min(first_user_id, second_user_id)
-        user2_id = max(first_user_id, second_user_id)
-
-        # Check if rule already exists
-        result = await session.execute(
-            select(Exclusion).where(
-                Exclusion.user1_id == user1_id,
-                Exclusion.user2_id == user2_id,
-                Exclusion.group_id == group_id
-            )
-        )
-        existing = result.scalar_one_or_none()
-
-        if existing:
-            await query.edit_message_text(Messages.ERROR_DUPLICATE_RULE)
-            context.user_data.pop("addrule_first_user_id", None)
-            context.user_data.pop("addrule_first_user_name", None)
-            return
-
-        # Create exclusion
-        exclusion = Exclusion(
-            user1_id=user1_id,
-            user2_id=user2_id,
-            group_id=group_id
-        )
-        session.add(exclusion)
-        await session.commit()
-
-        # Get group name
-        result = await session.execute(
-            select(Group).where(Group.id == group_id)
-        )
-        group = result.scalar_one()
-
-        await query.edit_message_text(
-            Messages.ADDRULE_COMPLETE.format(
-                group_name=group.group_name,
-                name1=first_user_name,
-                name2=second_user.real_name
-            ),
-            parse_mode="Markdown"
-        )
-
-        logger.info(f"Added exclusion rule: {user1_id} <-> {user2_id} in group {group_id}")
-
-        context.user_data.pop("addrule_first_user_id", None)
-        context.user_data.pop("addrule_first_user_name", None)
-
-
-@require_private_chat
-@require_selected_group
-async def listrules_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List all exclusion rules for selected group"""
-    group_id = context.user_data["selected_group_id"]
-
-    async for session in get_session():
-        result = await session.execute(
-            select(Group).where(Group.id == group_id)
-        )
-        group = result.scalar_one()
-
-        result = await session.execute(
-            select(Exclusion).where(Exclusion.group_id == group_id)
-        )
-        exclusions = list(result.scalars().all())
-
-        if not exclusions:
-            await update.message.reply_text(Messages.NO_RULES)
-            return
-
-        rule_lines = []
-        for exclusion in exclusions:
-            # Get user names
-            result = await session.execute(
-                select(User).where(User.id == exclusion.user1_id)
-            )
-            user1 = result.scalar_one()
-
-            result = await session.execute(
-                select(User).where(User.id == exclusion.user2_id)
-            )
-            user2 = result.scalar_one()
-
-            rule_lines.append(
-                Messages.RULE_ENTRY.format(
-                    name1=user1.real_name,
-                    name2=user2.real_name
-                )
-            )
-
-        await update.message.reply_text(
-            Messages.LIST_RULES.format(
-                group_name=group.group_name,
-                rules_list="\n".join(rule_lines),
-                count=len(exclusions)
-            ),
-            parse_mode="Markdown"
-        )
-
-
-@require_private_chat
-@require_selected_group
-async def removerule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Remove an exclusion rule"""
-    group_id = context.user_data["selected_group_id"]
-
-    async for session in get_session():
-        result = await session.execute(
-            select(Exclusion).where(Exclusion.group_id == group_id)
-        )
-        exclusions = list(result.scalars().all())
-
-        if not exclusions:
-            await update.message.reply_text(Messages.NO_RULES)
-            return
-
-        # Build inline keyboard with rules
-        keyboard = []
-        for exclusion in exclusions:
-            result = await session.execute(
-                select(User).where(User.id == exclusion.user1_id)
-            )
-            user1 = result.scalar_one()
-
-            result = await session.execute(
-                select(User).where(User.id == exclusion.user2_id)
-            )
-            user2 = result.scalar_one()
-
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"{user1.real_name} ↔ {user2.real_name}",
-                    callback_data=f"remove_rule_{exclusion.id}"
-                )
-            ])
-
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            Messages.REMOVE_RULE_SELECT,
-            reply_markup=reply_markup
-        )
-
-
-async def handle_remove_rule_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle rule removal callback"""
-    query = update.callback_query
-    await query.answer()
-
-    if not query.data.startswith("remove_rule_"):
-        return
-
-    exclusion_id = int(query.data.replace("remove_rule_", ""))
-
-    async for session in get_session():
-        await session.execute(
-            delete(Exclusion).where(Exclusion.id == exclusion_id)
-        )
-        await session.commit()
-
-        logger.info(f"Removed exclusion rule {exclusion_id}")
-
-    await query.edit_message_text(Messages.RULE_REMOVED)
-
-
-@require_private_chat
-@require_selected_group
-async def listjoined_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List all joined participants in selected group"""
-    group_id = context.user_data["selected_group_id"]
-
-    async for session in get_session():
-        result = await session.execute(
-            select(Group).where(Group.id == group_id)
-        )
-        group = result.scalar_one()
-
-        result = await session.execute(
-            select(User).where(User.group_id == group_id).order_by(User.joined_at)
-        )
-        users = list(result.scalars().all())
-
-        if not users:
-            await update.message.reply_text(Messages.NO_PARTICIPANTS)
-            return
-
-        user_lines = []
-        for user in users:
-            if user.telegram_username:
-                user_lines.append(
-                    Messages.USER_ENTRY.format(
-                        name=escape_markdown(user.real_name),
-                        username=escape_markdown(user.telegram_username)
-                    )
-                )
-            else:
-                user_lines.append(
-                    Messages.USER_ENTRY_NO_USERNAME.format(
-                        name=escape_markdown(user.real_name)
-                    )
-                )
-
-        await update.message.reply_text(
-            Messages.LIST_JOINED.format(
-                group_name=escape_markdown(group.group_name or ""),
-                count=len(users),
-                users_list="\n".join(user_lines)
-            ),
-            parse_mode="Markdown"
-        )
+    await _reply(update, render(Messages.DISBAND_CONFIRM, group_name=group.title), _confirm_markup("disband", group.id))
 
 
 @require_private_chat
 async def adminhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show admin help"""
-    await update.message.reply_text(Messages.ADMIN_HELP, parse_mode="Markdown")
+    await _reply(update, Messages.ADMIN_HELP)
 
 
-@require_private_chat
-@require_selected_group
-async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Reset assignments for selected group"""
-    group_id = context.user_data["selected_group_id"]
-
-    context.user_data["pending_reset_group_id"] = group_id
-    context.user_data["awaiting_reset_confirmation"] = True
-
-    await update.message.reply_text(Messages.RESET_CONFIRM, parse_mode="Markdown")
+# --- callbacks ----------------------------------------------------------------
 
 
-async def handle_reset_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle reset confirmation"""
-    if not update.message:
-        return
+async def _event_as_admin(s: AsyncSession, update: Update, context: ContextTypes.DEFAULT_TYPE, event_id: int) -> Event | None:
+    query, user = update.callback_query, update.effective_user
+    assert query is not None and user is not None
+    event = await seasons.get_event(s, event_id)
+    if event is None or event.status == EventStatus.CLOSED:
+        await query.answer(Messages.STALE_BUTTON, show_alert=True)
+        return None
+    if not await is_chat_admin(event.group.telegram_chat_id, user.id, context.bot):
+        await query.answer(Messages.ERROR_ADMIN_ONLY, show_alert=True)
+        return None
+    return event
 
-    response = update.message.text.lower().strip()
-    group_id = context.user_data.get("pending_reset_group_id")
 
-    if response == Messages.CONFIRM_YES:
-        event_year = config.EVENT_YEAR
+async def _edit(update: Update, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
+    query = update.callback_query
+    assert query is not None
+    await query.edit_message_text(Safe(text), reply_markup=markup)
 
-        async for session in get_session():
-            await session.execute(
-                delete(Assignment).where(
-                    Assignment.group_id == group_id,
-                    Assignment.event_year == event_year
-                )
-            )
-            await session.commit()
 
-            await update.message.reply_text(Messages.RESET_COMPLETE)
-            logger.info(f"Reset assignments for group {group_id}, year {event_year}")
+async def on_select_group(update: Update, context: ContextTypes.DEFAULT_TYPE, group_id: int) -> None:
+    query, user = update.callback_query, update.effective_user
+    assert query is not None and user is not None
+    async with session_scope() as s:
+        group = await seasons.get_group(s, group_id)
+        if group is None or not group.is_active:
+            await query.answer()
+            await _edit(update, Messages.ERROR_GROUP_NOT_FOUND)
+            return
+        if not await is_chat_admin(group.telegram_chat_id, user.id, context.bot):
+            await query.answer()
+            await _edit(update, Messages.ERROR_ADMIN_ONLY)
+            return
+        await state.select_group(s, user.id, group.id)
+    await query.answer()
+    await _edit(update, render(Messages.GROUP_SELECTED, group_name=group.title))
+    logger.info("user_id=%s selected group_id=%s", user.id, group_id)
+
+
+async def on_rule_page(update: Update, context: ContextTypes.DEFAULT_TYPE, event_id: int, first_id: int | None, page: int) -> None:
+    query = update.callback_query
+    assert query is not None
+    async with session_scope() as s:
+        event = await _event_as_admin(s, update, context, event_id)
+        if event is None:
+            return
+        people = await seasons.participants(s, event.id)
+        first = next((p for p in people if p.id == first_id), None)
+    await query.answer()
+    if first_id is None:
+        markup = _people_keyboard(people, page, lambda pid: callback("rf", event_id, pid), lambda pg: callback("ra", event_id, pg))
+        await _edit(update, Messages.ADDRULE_SELECT_FIRST, markup)
+    elif first is not None:
+        others = [p for p in people if p.id != first.id]
+        markup = _people_keyboard(
+            others, page, lambda pid: callback("rs", event_id, first.id, pid), lambda pg: callback("rb", event_id, first.id, pg)
+        )
+        await _edit(update, render(Messages.ADDRULE_SELECT_SECOND, first_name=first.real_name), markup)
+
+
+async def on_rule_first(update: Update, context: ContextTypes.DEFAULT_TYPE, event_id: int, participant_id: int) -> None:
+    async with session_scope() as s:
+        event = await _event_as_admin(s, update, context, event_id)
+        if event is None:
+            return
+        if participant_id not in {p.id for p in await seasons.participants(s, event.id)}:
+            assert update.callback_query is not None
+            await update.callback_query.answer(Messages.STALE_BUTTON, show_alert=True)
+            return
+    await on_rule_page(update, context, event_id, participant_id, 0)
+
+
+async def on_rule_second(update: Update, context: ContextTypes.DEFAULT_TYPE, event_id: int, first_id: int, second_id: int) -> None:
+    query = update.callback_query
+    assert query is not None
+    async with session_scope() as s:
+        event = await _event_as_admin(s, update, context, event_id)
+        if event is None:
+            return
+        people = {p.id: p for p in await seasons.participants(s, event.id)}
+        first, second = people.get(first_id), people.get(second_id)
+        if first is None or second is None or first.telegram_id == second.telegram_id:
+            await query.answer(Messages.STALE_BUTTON, show_alert=True)
+            return
+        created = await seasons.add_rule(s, event.group_id, first.telegram_id, second.telegram_id)
+        group_title = event.group.title
+    await query.answer()
+    if created:
+        logger.info("Rule added in group_id=%s", event.group_id)
+        await _edit(update, render(Messages.ADDRULE_COMPLETE, group_name=group_title, name1=first.real_name, name2=second.real_name))
     else:
-        await update.message.reply_text("Отменено.")
-
-    context.user_data.pop("pending_reset_group_id", None)
-    context.user_data.pop("awaiting_reset_confirmation", None)
+        await _edit(update, Messages.ERROR_DUPLICATE_RULE)
 
 
-@require_private_chat
-@require_selected_group
-async def dryrunassignments_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Simulate Secret Santa assignments without saving to database"""
-    group_id = context.user_data["selected_group_id"]
-
-    async for session in get_session():
-        # Get group
-        result = await session.execute(
-            select(Group).where(Group.id == group_id)
-        )
-        group = result.scalar_one_or_none()
-
-        if not group:
-            await update.message.reply_text(Messages.ERROR_GROUP_NOT_FOUND)
+async def on_remove_rule(update: Update, context: ContextTypes.DEFAULT_TYPE, rule_id: int) -> None:
+    query, user = update.callback_query, update.effective_user
+    assert query is not None and user is not None
+    async with session_scope() as s:
+        rule = await s.get(Exclusion, rule_id)
+        if rule is None:
+            await query.answer(Messages.STALE_BUTTON, show_alert=True)
             return
-
-        # Get all participants
-        result = await session.execute(
-            select(User).where(User.group_id == group_id).order_by(User.real_name)
-        )
-        participants = list(result.scalars().all())
-
-        if len(participants) < 3:
-            await update.message.reply_text(
-                "❌ Недостаточно участников для распределения. Минимум 3 участника."
-            )
+        group = await seasons.get_group(s, rule.group_id)
+        if group is None or not await is_chat_admin(group.telegram_chat_id, user.id, context.bot):
+            await query.answer(Messages.ERROR_ADMIN_ONLY, show_alert=True)
             return
+        await s.delete(rule)
+    await query.answer()
+    await _edit(update, Messages.RULE_REMOVED)
+    logger.info("Rule %s removed by user_id=%s", rule_id, user.id)
 
-        # Get exclusion rules
-        result = await session.execute(
-            select(Exclusion).where(Exclusion.group_id == group_id)
+
+async def on_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, action_code: int, group_id: int) -> None:
+    query, user = update.callback_query, update.effective_user
+    assert query is not None and user is not None
+    action = CONFIRM_ACTIONS.get(action_code)
+    async with session_scope() as s:
+        group = await seasons.get_group(s, group_id)
+        if action is None or group is None:
+            await query.answer(Messages.STALE_BUTTON, show_alert=True)
+            return
+        # rights are checked at click time, not when the prompt was shown
+        if not await is_chat_admin(group.telegram_chat_id, user.id, context.bot):
+            await query.answer(Messages.ERROR_ADMIN_ONLY, show_alert=True)
+            return
+        if action == "reset":
+            event = await seasons.current_event(s, group.id)
+            text = Messages.RESET_COMPLETE if event and await seasons.reset_draw(s, event) else Messages.RESET_NOTHING
+        elif action == "disband":
+            await seasons.disband_group(s, group)
+            text = Messages.GROUP_DISBANDED
+        else:  # new_season
+            await seasons.start_new_season(s, group)
+            text = Messages.NEW_SEASON_OPENED
+    await query.answer()
+    await _edit(update, text)
+    logger.info("Confirmed %s for group_id=%s by user_id=%s", action, group_id, user.id)
+
+
+async def on_removal_page(update: Update, context: ContextTypes.DEFAULT_TYPE, event_id: int, page: int) -> None:
+    query = update.callback_query
+    assert query is not None
+    async with session_scope() as s:
+        event = await _event_as_admin(s, update, context, event_id)
+        if event is None:
+            return
+        people = await seasons.participants(s, event.id)
+    await query.answer()
+    await _edit(update, Messages.REMOVE_PARTICIPANT_SELECT, _removal_keyboard(event_id, people, page))
+
+
+async def _participant_in(s: AsyncSession, update: Update, event: Event, participant_id: int) -> Participant | None:
+    participant = await s.get(Participant, participant_id)
+    if participant is None or participant.event_id != event.id:
+        assert update.callback_query is not None
+        await update.callback_query.answer(Messages.STALE_BUTTON, show_alert=True)
+        return None
+    return participant
+
+
+async def on_removal_pick(update: Update, context: ContextTypes.DEFAULT_TYPE, event_id: int, participant_id: int) -> None:
+    query = update.callback_query
+    assert query is not None
+    async with session_scope() as s:
+        event = await _event_as_admin(s, update, context, event_id)
+        if event is None:
+            return
+        participant = await _participant_in(s, update, event, participant_id)
+        if participant is None:
+            return
+        text = render(
+            Messages.REMOVE_PARTICIPANT_CONFIRM,
+            name=participant.real_name,
+            group_name=event.group.title,
+            drawn_note=Messages.DRAWN_REPAIR_NOTE if event.status == EventStatus.DRAWN else "",
         )
-        exclusions = list(result.scalars().all())
+    markup = InlineKeyboardMarkup(
+        [[
+            InlineKeyboardButton(Messages.CONFIRM_YES_BUTTON, callback_data=callback("px", event_id, participant_id)),
+            InlineKeyboardButton(Messages.CONFIRM_NO_BUTTON, callback_data=callback("cx")),
+        ]]
+    )
+    await query.answer()
+    await _edit(update, text, markup)
 
-        # Generate assignments (dry run - not saved to database)
+
+async def on_removal_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, event_id: int, participant_id: int) -> None:
+    query, admin = update.callback_query, update.effective_user
+    assert query is not None and admin is not None
+    async with session_scope() as s:
+        # rights are checked at click time, not when the prompt was shown
+        event = await _event_as_admin(s, update, context, event_id)
+        if event is None:
+            return
+        participant = await _participant_in(s, update, event, participant_id)
+        if participant is None:
+            return
+        name, removed_telegram_id = participant.real_name, participant.telegram_id
+        group = event.group
         try:
-            assignments = AssignmentGenerator.generate_assignments(participants, exclusions)
-        except ValueError as e:
-            await update.message.reply_text(
-                f"❌ Не удалось сгенерировать распределение: {str(e)}"
-            )
+            reassigned = await seasons.remove_participant(s, event, participant)
+        except NotEnoughParticipants:
+            await query.answer()
+            await _edit(update, Messages.REPAIR_TOO_FEW)
             return
-
-        # Build user ID to name mapping
-        user_map = {user.id: user.real_name for user in participants}
-
-        # Format output
-        assignment_lines = []
-        for giver_id, receiver_id in assignments:
-            giver_name = user_map.get(giver_id, "Unknown")
-            receiver_name = user_map.get(receiver_id, "Unknown")
-            assignment_lines.append(f"• {escape_markdown(giver_name)} → {escape_markdown(receiver_name)}")
-
-        response = (
-            f"**Симуляция распределения для группы: {escape_markdown(group.group_name)}**\n\n"
-            f"Участников: {len(participants)}\n"
-            f"Правил исключения: {len(exclusions)}\n\n"
-            f"**Пары (гивер → получатель):**\n"
-            f"{chr(10).join(assignment_lines)}\n\n"
-            f"_Это только симуляция. Данные не сохранены в базу._"
-        )
-
-        await update.message.reply_text(response, parse_mode="Markdown")
-        logger.info(f"Dry run assignments for group {group_id}: {len(assignments)} pairs generated")
+        except ImpossibleDraw:
+            await query.answer()
+            await _edit(update, Messages.REPAIR_IMPOSSIBLE)
+            return
+        notices = reassignment_notices(reassigned, group)
+        group_title, chat_id = group.title, group.telegram_chat_id
+    logger.info("Participant removed from event_id=%s by user_id=%s (%s reassigned)", event_id, admin.id, len(reassigned))
+    await query.answer()
+    # the admin learns how many Santas changed, never who gives to whom
+    done = render(Messages.REMOVE_PARTICIPANT_DONE, name=name)
+    if reassigned:
+        done = Safe(done + render(Messages.REMOVE_PARTICIPANT_REASSIGNED, count=len(reassigned)))
+    await _edit(update, done)
+    if removed_telegram_id != admin.id:
+        await send_dm(context.bot, removed_telegram_id, render(Messages.REMOVED_BY_ADMIN, group_name=group_title))
+    notice = Messages.PARTICIPANT_LEFT_REPAIRED if reassigned else Messages.PARTICIPANT_LEFT
+    await post(context.bot, chat_id, render(notice, name=name))
+    await deliver(context.bot, notices)
 
 
-async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Route admin text messages to appropriate handler"""
-    if not update.effective_chat or update.effective_chat.type != "private":
+async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None:
         return
-
-    # Import here to avoid circular import
-    from . import user
-
-    # Check for user flows first (admin can also be a participant)
-    if context.user_data.get("registration_step"):
-        await user.handle_registration_flow(update, context)
+    cb = parse_callback(query.data)
+    if cb is None:
+        await query.answer(Messages.STALE_BUTTON)
         return
-
-    if context.user_data.get("wishlist_update_step"):
-        await user.handle_wishlist_update(update, context)
-        return
-
-    # Check for admin-specific confirmation flows
-    if context.user_data.get("awaiting_disband_confirmation"):
-        await handle_disband_confirmation(update, context)
-        return
-
-    if context.user_data.get("awaiting_reset_confirmation"):
-        await handle_reset_confirmation(update, context)
-        return
+    a = cb.args
+    match cb.kind:
+        case "sg":
+            await on_select_group(update, context, a[0])
+        case "ra":
+            await on_rule_page(update, context, a[0], None, a[1])
+        case "rb":
+            await on_rule_page(update, context, a[0], a[1], a[2])
+        case "rf":
+            await on_rule_first(update, context, a[0], a[1])
+        case "rs":
+            await on_rule_second(update, context, a[0], a[1], a[2])
+        case "rr":
+            await on_remove_rule(update, context, a[0])
+        case "cf":
+            await on_confirm(update, context, a[0], a[1])
+        case "cx":
+            await query.answer()
+            await _edit(update, Messages.CANCELLED)
+        case "rn" | "rw":
+            await registration.reuse_callback(update, context, cb.kind, a[0])
+        case "lq":
+            await user.on_leave_pick(update, context, a[0])
+        case "lv":
+            await user.on_leave_confirm(update, context, a[0])
+        case "pp":
+            await on_removal_page(update, context, a[0], a[1])
+        case "pr":
+            await on_removal_pick(update, context, a[0], a[1])
+        case "px":
+            await on_removal_confirm(update, context, a[0], a[1])
+        case _:
+            await query.answer()

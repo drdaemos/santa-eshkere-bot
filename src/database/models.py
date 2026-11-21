@@ -1,121 +1,168 @@
-"""SQLAlchemy database models for Santa Eshkere bot"""
+"""SQLAlchemy models.
+
+A Group is a Telegram chat. Each group runs one Event (season) at a time:
+open (people join) -> drawn (assignments sent) -> closed (archived when the
+next season starts). Participants belong to an event, so every season starts
+empty; exclusion rules belong to the group and are keyed by Telegram user id,
+so "these two are a couple" carries over between seasons.
+"""
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
-    Boolean,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
-    """Base class for all database models"""
     pass
 
 
+class EventStatus:
+    OPEN = "open"
+    DRAWN = "drawn"
+    CLOSED = "closed"
+
+
 class Group(Base):
-    """Telegram group where bot is activated"""
+    """Telegram group where the bot was activated"""
+
     __tablename__ = "groups"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     telegram_chat_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
-    group_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    activated_at: Mapped[datetime] = mapped_column(default=datetime.now)
-    disbanded_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    group_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    activated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    disbanded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    is_active: Mapped[bool] = mapped_column(default=True)
 
-    # Relationships
-    users: Mapped[list["User"]] = relationship(back_populates="group", cascade="all, delete-orphan")
+    events: Mapped[list["Event"]] = relationship(back_populates="group", cascade="all, delete-orphan")
     exclusions: Mapped[list["Exclusion"]] = relationship(back_populates="group", cascade="all, delete-orphan")
-    assignments: Mapped[list["Assignment"]] = relationship(back_populates="group", cascade="all, delete-orphan")
 
-    __table_args__ = (
-        Index("idx_groups_telegram_chat_id", "telegram_chat_id"),
-        Index("idx_groups_is_active", "is_active"),
-    )
+    __table_args__ = (Index("idx_groups_is_active", "is_active"),)
+
+    @property
+    def title(self) -> str:
+        return self.group_name or "Без названия"
 
 
-class User(Base):
-    """User who joined a Secret Santa group"""
-    __tablename__ = "users"
+class Event(Base):
+    """One Secret Santa season in a group"""
+
+    __tablename__ = "events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    telegram_username: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    real_name: Mapped[str] = mapped_column(Text, nullable=False)
-    wishlist: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
-    joined_at: Mapped[datetime] = mapped_column(default=datetime.now)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=EventStatus.OPEN)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    drawn_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    # Relationships
-    group: Mapped["Group"] = relationship(back_populates="users")
-    given_assignments: Mapped[list["Assignment"]] = relationship(
-        foreign_keys="Assignment.giver_id",
-        back_populates="giver",
-        cascade="all, delete-orphan"
-    )
-    received_assignments: Mapped[list["Assignment"]] = relationship(
-        foreign_keys="Assignment.receiver_id",
-        back_populates="receiver",
-        cascade="all, delete-orphan"
-    )
+    group: Mapped[Group] = relationship(back_populates="events")
+    participants: Mapped[list["Participant"]] = relationship(back_populates="event", cascade="all, delete-orphan")
+    assignments: Mapped[list["Assignment"]] = relationship(back_populates="event", cascade="all, delete-orphan")
 
     __table_args__ = (
-        UniqueConstraint("telegram_id", "group_id", name="uq_user_group"),
-        Index("idx_users_telegram_id", "telegram_id"),
-        Index("idx_users_group_id", "group_id"),
+        CheckConstraint("status IN ('open', 'drawn', 'closed')", name="ck_event_status"),
+        Index("idx_events_group_id", "group_id"),
+        # at most one current (not closed) season per group
+        Index(
+            "uq_events_current_per_group",
+            "group_id",
+            unique=True,
+            sqlite_where=text("status != 'closed'"),
+            postgresql_where=text("status != 'closed'"),
+        ),
+    )
+
+    @property
+    def year(self) -> int:
+        return self.created_at.year
+
+
+class Participant(Base):
+    """A person taking part in one event"""
+
+    __tablename__ = "participants"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), nullable=False)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    telegram_username: Mapped[str | None] = mapped_column(Text, nullable=True)
+    real_name: Mapped[str] = mapped_column(Text, nullable=False)
+    wishlist: Mapped[str] = mapped_column(Text, nullable=False)
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    event: Mapped[Event] = relationship(back_populates="participants")
+
+    __table_args__ = (
+        UniqueConstraint("event_id", "telegram_id", name="uq_participant_event_user"),
+        Index("idx_participants_telegram_id", "telegram_id"),
+        Index("idx_participants_event_id", "event_id"),
     )
 
 
 class Exclusion(Base):
-    """Exclusion rule: two users who shouldn't be matched"""
+    """Two people (by Telegram id) who must not be paired, in a group, across seasons"""
+
     __tablename__ = "exclusions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user1_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    user2_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
-    created_at: Mapped[datetime] = mapped_column(default=datetime.now)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
+    telegram_id_a: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    telegram_id_b: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
-    # Relationships
-    group: Mapped["Group"] = relationship(back_populates="exclusions")
-    user1: Mapped["User"] = relationship(foreign_keys=[user1_id])
-    user2: Mapped["User"] = relationship(foreign_keys=[user2_id])
+    group: Mapped[Group] = relationship(back_populates="exclusions")
 
     __table_args__ = (
-        UniqueConstraint("user1_id", "user2_id", "group_id", name="uq_exclusion"),
-        CheckConstraint("user1_id < user2_id", name="ck_canonical_order"),
+        UniqueConstraint("group_id", "telegram_id_a", "telegram_id_b", name="uq_exclusion_pair"),
+        CheckConstraint("telegram_id_a < telegram_id_b", name="ck_exclusion_canonical_order"),
         Index("idx_exclusions_group_id", "group_id"),
     )
 
 
 class Assignment(Base):
-    """Secret Santa assignment: giver -> receiver"""
+    """giver -> receiver within one event"""
+
     __tablename__ = "assignments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
-    event_year: Mapped[int] = mapped_column(Integer, nullable=False)
-    giver_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    receiver_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    assigned_at: Mapped[datetime] = mapped_column(default=datetime.now)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), nullable=False)
+    giver_id: Mapped[int] = mapped_column(ForeignKey("participants.id", ondelete="CASCADE"), nullable=False)
+    receiver_id: Mapped[int] = mapped_column(ForeignKey("participants.id", ondelete="CASCADE"), nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    # Relationships
-    group: Mapped["Group"] = relationship(back_populates="assignments")
-    giver: Mapped["User"] = relationship(foreign_keys=[giver_id], back_populates="given_assignments")
-    receiver: Mapped["User"] = relationship(foreign_keys=[receiver_id], back_populates="received_assignments")
+    event: Mapped[Event] = relationship(back_populates="assignments")
+    giver: Mapped[Participant] = relationship(foreign_keys=[giver_id])
+    receiver: Mapped[Participant] = relationship(foreign_keys=[receiver_id])
 
     __table_args__ = (
-        UniqueConstraint("group_id", "event_year", "giver_id", name="uq_assignment"),
-        Index("idx_assignments_group_id", "group_id"),
-        Index("idx_assignments_event_year", "event_year"),
+        UniqueConstraint("event_id", "giver_id", name="uq_assignment_giver"),
+        UniqueConstraint("event_id", "receiver_id", name="uq_assignment_receiver"),
+        CheckConstraint("giver_id != receiver_id", name="ck_assignment_not_self"),
+        Index("idx_assignments_event_id", "event_id"),
     )
+
+
+class DmState(Base):
+    """Per-user conversation state, kept in the DB so it survives redeploys"""
+
+    __tablename__ = "dm_states"
+
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    selected_group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
+    flow: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    flow_data: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
