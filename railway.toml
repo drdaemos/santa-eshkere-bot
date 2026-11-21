@@ -8,3 +8,7 @@ builder = "RAILPACK"
 [deploy]
 preDeployCommand = ["uv run --no-sync alembic upgrade head"]
 startCommand = "uv run --no-sync python bot.py"
+# Traffic switches to a new deploy only once this answers 200 (bot started,
+# webhook set, database reachable); otherwise the old deploy keeps running.
+healthcheckPath = "/health"
+healthcheckTimeout = 120

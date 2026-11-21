@@ -10,12 +10,13 @@ Kept to a few long journeys because each test starts a process (~1-2 s).
 """
 
 import os
+import tomllib
 
 import httpx
 import pytest
 
 from src.main import webhook_secret
-from tests.harness.process import ProcessHarness
+from tests.harness.process import ROOT, ProcessHarness
 from tests.harness.scenario import TEST_TOKEN, World, assignment_of, register
 
 pytestmark = pytest.mark.e2e
@@ -110,6 +111,21 @@ async def test_full_season_over_http(make_world):
     await admin.send(office, "/kickitoff")
     assert "уже сделано" in office.feed[-1].text
 
+    # a latecomer is spliced into the chain; then someone drops out
+    dasha = world.user("Dasha", username="dasha")
+    office.add(dasha)
+    await register(dasha, office, "Даша", "чай и пазлы")
+    assert assignment_of(dasha) in people
+    people["Даша"] = dasha
+    await people["Глеб"].dm("/leave")
+    await people["Глеб"].click(people["Глеб"].last_dm, "Да")
+    assert "больше не участвуешь" in people["Глеб"].last_dm.text
+    del people["Глеб"]
+    received = {name: assignment_of(actor) for name, actor in people.items()}
+    assert sorted(received.values()) == sorted(people), "still a complete draw without Глеб"
+    assert all(giver != receiver for giver, receiver in received.items())
+    assert received["Алиса"] != "Борис" and received["Борис"] != "Алиса"
+
     # next season: a returning player rejoins in two taps
     await admin.send(office, "/newseason")
     await admin.click(office.feed[-1], "Да")
@@ -165,4 +181,19 @@ async def test_webhook_mode_enforces_secret(make_world):
         assert (await client.post(server.webhook_url, content=b"not json", headers={"X-Telegram-Bot-Api-Secret-Token": server.webhook_secret})).status_code >= 400
     await server.settle(first_activity_timeout=0.5)
     assert len(alice.inbox) == replies_before, "forged updates must not be processed"
+    assert_clean(world)
+
+
+async def test_webhook_mode_serves_railway_healthcheck(make_world):
+    world = await make_world("webhook")
+    bot = world.harness.bot
+    healthcheck_path = tomllib.loads((ROOT / "railway.toml").read_text())["deploy"]["healthcheckPath"]
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{bot.url}{healthcheck_path}")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+        assert (await client.get(f"{bot.url}/webhook")).status_code == 405, "the webhook only takes POST"
+        assert (await client.get(f"{bot.url}/anything-else")).status_code == 404
+    # Railway polls this every few seconds during a deploy: keep it out of the logs
+    assert not any("/health" in line and "GET" in line for line in bot.lines)
     assert_clean(world)

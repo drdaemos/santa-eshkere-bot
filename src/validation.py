@@ -76,6 +76,11 @@ _CALLBACK_SHAPES: dict[str, int] = {
     "cx": 0,  # cancel a confirmation
     "rn": 1,  # registration: reuse previous name: event_id
     "rw": 1,  # registration: reuse previous wishlist: event_id
+    "lq": 1,  # /leave, group picked: participant_id
+    "lv": 1,  # /leave confirmed: participant_id
+    "pp": 2,  # removeparticipant page: event_id, page
+    "pr": 2,  # removeparticipant picked: event_id, participant_id
+    "px": 2,  # removeparticipant confirmed: event_id, participant_id
     "noop": 0,
 }
 

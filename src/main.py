@@ -1,5 +1,6 @@
 """Main entry point for Santa Eshkere bot"""
 
+import asyncio
 import hashlib
 import logging
 import sys
@@ -22,6 +23,7 @@ from .config import config
 from .database.session import close_db, init_db
 from .handlers import admin, group, user
 from .messages import Messages
+from .web import WEBHOOK_PATH, serve_webhook
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +111,7 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("status", user.status_command))
     application.add_handler(CommandHandler("wishlist", user.wishlist_command))
     application.add_handler(CommandHandler("cancel", user.cancel_command))
+    application.add_handler(CommandHandler("leave", user.leave_command))
 
     # Admin DM
     application.add_handler(CommandHandler("listgroups", admin.listgroups_command))
@@ -118,6 +121,7 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("listrules", admin.listrules_command))
     application.add_handler(CommandHandler("removerule", admin.removerule_command))
     application.add_handler(CommandHandler("listjoined", admin.listjoined_command))
+    application.add_handler(CommandHandler("removeparticipant", admin.removeparticipant_command))
     application.add_handler(CommandHandler("adminhelp", admin.adminhelp_command))
     application.add_handler(CommandHandler("reset", admin.reset_command))
     application.add_handler(CommandHandler("dryrunassignments", admin.dryrun_command))
@@ -176,22 +180,19 @@ def main() -> None:
 
     if config.USE_WEBHOOK:
         logger.info("Starting bot in webhook mode...")
-        logger.info(f"Webhook URL: {config.WEBHOOK_URL}/webhook")
-        logger.info(f"Listening on: 0.0.0.0:{config.PORT}")
-
+        logger.info(f"Webhook URL: {config.WEBHOOK_URL}{WEBHOOK_PATH}")
         try:
-            application.run_webhook(
-                listen="0.0.0.0",
-                port=config.PORT,
-                url_path="/webhook",
-                webhook_url=f"{config.WEBHOOK_URL}/webhook",
-                secret_token=webhook_secret(config.TELEGRAM_BOT_TOKEN, config.WEBHOOK_SECRET),
-                allowed_updates=ALLOWED_UPDATES,
-                # Keep updates sent while a deploy was in progress
-                drop_pending_updates=False,
+            asyncio.run(
+                serve_webhook(
+                    application,
+                    port=config.PORT,
+                    webhook_url=f"{config.WEBHOOK_URL}{WEBHOOK_PATH}",
+                    secret=webhook_secret(config.TELEGRAM_BOT_TOKEN, config.WEBHOOK_SECRET),
+                    allowed_updates=ALLOWED_UPDATES,
+                )
             )
         except Exception as e:
-            logger.error(f"Webhook failed to start: {e}", exc_info=True)
+            logger.error(f"Webhook failed to start: {e.__class__.__name__}", exc_info=True)
             raise
     else:
         logger.info("Starting bot in polling mode...")

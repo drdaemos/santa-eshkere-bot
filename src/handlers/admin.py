@@ -18,9 +18,10 @@ from ..formatting import Safe, join, render, truncate
 from ..messages import Messages
 from ..services import seasons, state
 from ..services.assignment import ImpossibleDraw, NotEnoughParticipants
+from ..services.notifications import deliver, post, reassignment_notices, send_dm
 from ..utils.auth import is_chat_admin, require_private_chat
 from ..validation import CONFIRM_ACTIONS, CONFIRM_CODES, ValidationError, callback, parse_callback, parse_index
-from . import registration
+from . import registration, user
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,24 @@ async def listjoined_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         for p in people
     ]
     await _reply(update, render(Messages.LIST_JOINED, group_name=group.title, count=len(people), users_list=join(lines)))
+
+
+@require_private_chat
+async def removeparticipant_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with session_scope() as s:
+        selected = await _selected_event(s, update, context)
+        if selected is None:
+            return
+        _, event = selected
+        people = await seasons.participants(s, event.id)
+    if not people:
+        await _reply(update, Messages.NO_PARTICIPANTS)
+        return
+    await _reply(update, Messages.REMOVE_PARTICIPANT_SELECT, _removal_keyboard(event.id, people, 0))
+
+
+def _removal_keyboard(event_id: int, people: list[Participant], page: int) -> InlineKeyboardMarkup:
+    return _people_keyboard(people, page, lambda pid: callback("pr", event_id, pid), lambda pg: callback("pp", event_id, pg))
 
 
 @require_private_chat
@@ -413,6 +432,92 @@ async def on_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, action_
     logger.info("Confirmed %s for group_id=%s by user_id=%s", action, group_id, user.id)
 
 
+async def on_removal_page(update: Update, context: ContextTypes.DEFAULT_TYPE, event_id: int, page: int) -> None:
+    query = update.callback_query
+    assert query is not None
+    async with session_scope() as s:
+        event = await _event_as_admin(s, update, context, event_id)
+        if event is None:
+            return
+        people = await seasons.participants(s, event.id)
+    await query.answer()
+    await _edit(update, Messages.REMOVE_PARTICIPANT_SELECT, _removal_keyboard(event_id, people, page))
+
+
+async def _participant_in(s: AsyncSession, update: Update, event: Event, participant_id: int) -> Participant | None:
+    participant = await s.get(Participant, participant_id)
+    if participant is None or participant.event_id != event.id:
+        assert update.callback_query is not None
+        await update.callback_query.answer(Messages.STALE_BUTTON, show_alert=True)
+        return None
+    return participant
+
+
+async def on_removal_pick(update: Update, context: ContextTypes.DEFAULT_TYPE, event_id: int, participant_id: int) -> None:
+    query = update.callback_query
+    assert query is not None
+    async with session_scope() as s:
+        event = await _event_as_admin(s, update, context, event_id)
+        if event is None:
+            return
+        participant = await _participant_in(s, update, event, participant_id)
+        if participant is None:
+            return
+        text = render(
+            Messages.REMOVE_PARTICIPANT_CONFIRM,
+            name=participant.real_name,
+            group_name=event.group.title,
+            drawn_note=Messages.DRAWN_REPAIR_NOTE if event.status == EventStatus.DRAWN else "",
+        )
+    markup = InlineKeyboardMarkup(
+        [[
+            InlineKeyboardButton(Messages.CONFIRM_YES_BUTTON, callback_data=callback("px", event_id, participant_id)),
+            InlineKeyboardButton(Messages.CONFIRM_NO_BUTTON, callback_data=callback("cx")),
+        ]]
+    )
+    await query.answer()
+    await _edit(update, text, markup)
+
+
+async def on_removal_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, event_id: int, participant_id: int) -> None:
+    query, admin = update.callback_query, update.effective_user
+    assert query is not None and admin is not None
+    async with session_scope() as s:
+        # rights are checked at click time, not when the prompt was shown
+        event = await _event_as_admin(s, update, context, event_id)
+        if event is None:
+            return
+        participant = await _participant_in(s, update, event, participant_id)
+        if participant is None:
+            return
+        name, removed_telegram_id = participant.real_name, participant.telegram_id
+        group = event.group
+        try:
+            reassigned = await seasons.remove_participant(s, event, participant)
+        except NotEnoughParticipants:
+            await query.answer()
+            await _edit(update, Messages.REPAIR_TOO_FEW)
+            return
+        except ImpossibleDraw:
+            await query.answer()
+            await _edit(update, Messages.REPAIR_IMPOSSIBLE)
+            return
+        notices = reassignment_notices(reassigned, group)
+        group_title, chat_id = group.title, group.telegram_chat_id
+    logger.info("Participant removed from event_id=%s by user_id=%s (%s reassigned)", event_id, admin.id, len(reassigned))
+    await query.answer()
+    # the admin learns how many Santas changed, never who gives to whom
+    done = render(Messages.REMOVE_PARTICIPANT_DONE, name=name)
+    if reassigned:
+        done = Safe(done + render(Messages.REMOVE_PARTICIPANT_REASSIGNED, count=len(reassigned)))
+    await _edit(update, done)
+    if removed_telegram_id != admin.id:
+        await send_dm(context.bot, removed_telegram_id, render(Messages.REMOVED_BY_ADMIN, group_name=group_title))
+    notice = Messages.PARTICIPANT_LEFT_REPAIRED if reassigned else Messages.PARTICIPANT_LEFT
+    await post(context.bot, chat_id, render(notice, name=name))
+    await deliver(context.bot, notices)
+
+
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if query is None:
@@ -442,5 +547,15 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await _edit(update, Messages.CANCELLED)
         case "rn" | "rw":
             await registration.reuse_callback(update, context, cb.kind, a[0])
+        case "lq":
+            await user.on_leave_pick(update, context, a[0])
+        case "lv":
+            await user.on_leave_confirm(update, context, a[0])
+        case "pp":
+            await on_removal_page(update, context, a[0], a[1])
+        case "pr":
+            await on_removal_pick(update, context, a[0], a[1])
+        case "px":
+            await on_removal_confirm(update, context, a[0], a[1])
         case _:
             await query.answer()

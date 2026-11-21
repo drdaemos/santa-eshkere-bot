@@ -86,6 +86,23 @@ The bot will start in polling mode using SQLite database for local development.
 3. **Check status:**
    - Send `/status` in DM to see your registration and assignment
 
+4. **Leave:**
+   - Send `/leave` in DM
+
+### Changes after the draw
+
+People have usually started shopping by then, so the bot never reshuffles
+everyone:
+- **Someone leaves** (`/leave`, or an admin's `/removeparticipant`): their
+  Santa now gives to the leaver's receiver. If a rule forbids that pair, one
+  more pair is rewired, so at most two Santas get a new assignment. If no such
+  small fix exists, or fewer than 3 people would remain, the bot refuses and
+  points to `/reset`.
+- **Someone joins late** (`/join` works after the draw): one link A → B
+  becomes A → newcomer → B. A gets a new assignment and the newcomer gets B.
+- Only Santas whose assignment changed get a DM. The group sees who left,
+  never who gives to whom.
+
 ## Admin Commands
 
 Admins are the Telegram admins of each group; rights are re-checked with
@@ -103,6 +120,7 @@ Telegram on every command and button press.
 - `/listrules` - Show exclusion rules
 - `/removerule` - Remove an exclusion rule
 - `/listjoined` - Show all participants
+- `/removeparticipant` - Remove someone from the season (repairs the draw)
 - `/disband` - Deactivate the selected group
 - `/dryrunassignments` - Preview a draw without saving it
 - `/reset` - Clear this season's assignments (caution!)
@@ -127,8 +145,10 @@ git push origin main
    - `TELEGRAM_BOT_TOKEN` - your bot token
    - `USE_WEBHOOK` - set to `true`
    - `DATABASE_URL` - reference the Postgres service's `DATABASE_URL`
-5. Build and start commands come from [railway.toml](railway.toml)
-   (migrations run as the pre-deploy step).
+5. Build, start and healthcheck settings come from [railway.toml](railway.toml):
+   migrations run as the pre-deploy step, and Railway only switches traffic to
+   a new deploy once `GET /health` answers 200 (bot started, webhook set,
+   database reachable).
 
 ### 3. Set Webhook URL
 
@@ -145,6 +165,7 @@ santa-eshkere-bot/
 │   ├── __init__.py
 │   ├── __main__.py          # Allows python -m src
 │   ├── main.py              # Entry point
+│   ├── web.py               # Webhook + /health HTTP server (webhook mode)
 │   ├── config.py            # Configuration
 │   ├── messages.py          # Russian messages
 │   ├── database/
@@ -271,11 +292,11 @@ Two layers share that DSL:
 
 | Layer | Where | What it proves |
 |---|---|---|
-| in-process (`tests/flows`, most tests) | real `Application`, fake HTTP transport | every flow and edge case, fast (~10 s for ~200 tests) |
-| process e2e (`tests/e2e`, marker `e2e`) | `bot.py` as its own OS process, talking HTTP to `tests/harness/server.py` | deploy-shaped startup (pre-deploy command from `railway.toml`, env-only config), polling and webhook modes, webhook secret enforcement, surviving a killed process |
+| in-process (`tests/flows`, most tests) | real `Application`, fake HTTP transport | every flow and edge case, fast (~20 s for ~270 tests) |
+| process e2e (`tests/e2e`, marker `e2e`) | `bot.py` as its own OS process, talking HTTP to `tests/harness/server.py` | deploy-shaped startup (pre-deploy command from `railway.toml`, env-only config), polling and webhook modes, webhook secret enforcement, the `/health` endpoint Railway checks, surviving a killed process |
 
 ```bash
-uv run pytest                 # everything on SQLite (~45 s)
+uv run pytest                 # everything on SQLite (~60 s)
 uv run pytest -m "not e2e"    # fast loop
 uv run pytest -m e2e          # just the process-level journeys
 ```

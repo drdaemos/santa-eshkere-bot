@@ -11,6 +11,8 @@ from ..database.session import session_scope
 from ..formatting import Safe, render, truncate
 from ..messages import Messages
 from ..services import seasons, state
+from ..services.assignment import ImpossibleDraw
+from ..services.notifications import Notice, deliver, reassignment_notices
 from ..validation import ValidationError, callback, clean_name, clean_wishlist
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,8 @@ def _button(text: str, data: str) -> InlineKeyboardMarkup:
 
 async def name_prompt(s: AsyncSession, group: Group, event: Event, telegram_id: int) -> tuple[Safe, InlineKeyboardMarkup | None]:
     text = render(Messages.ASK_NAME, group_name=group.title)
+    if event.status == EventStatus.DRAWN:
+        text = Safe(text + Messages.LATE_JOIN_NOTE)
     previous = await seasons.previous_participation(s, group.id, telegram_id, event.id)
     if previous is None:
         return text, None
@@ -40,12 +44,12 @@ async def wishlist_prompt(s: AsyncSession, event: Event, telegram_id: int) -> tu
 
 
 async def _joinable_event(s: AsyncSession, event_id: int) -> tuple[Event | None, str | None]:
-    """(event, None) if registration into event_id may proceed, else (None, error message)."""
+    """(event, None) if registration into event_id may proceed, else (None, error message).
+
+    A drawn season is joinable too: the newcomer is spliced into the chain."""
     event = await seasons.get_event(s, event_id)
     if event is None or event.status == EventStatus.CLOSED or not event.group.is_active:
         return None, Messages.NO_SEASON
-    if event.status == EventStatus.DRAWN:
-        return None, Messages.JOIN_AFTER_DRAW
     return event, None
 
 
@@ -89,27 +93,42 @@ async def on_name(s: AsyncSession, update: Update, flow: state.Flow, raw: str) -
     return await wishlist_prompt(s, event, telegram_id)
 
 
-async def on_wishlist(s: AsyncSession, update: Update, flow: state.Flow, raw: str) -> Safe:
+async def on_wishlist(s: AsyncSession, update: Update, flow: state.Flow, raw: str) -> tuple[Safe, list[Notice]]:
+    """Returns the reply and DMs to send once the session is committed."""
     try:
         wishlist = clean_wishlist(raw)
     except ValidationError as e:
-        return render(Messages.INVALID_INPUT, reason=str(e))
+        return render(Messages.INVALID_INPUT, reason=str(e)), []
     return await _complete(s, update, flow, wishlist)
 
 
-async def _complete(s: AsyncSession, update: Update, flow: state.Flow, wishlist: str) -> Safe:
+async def _complete(s: AsyncSession, update: Update, flow: state.Flow, wishlist: str) -> tuple[Safe, list[Notice]]:
     user = update.effective_user
     assert user is not None
     event, error = await _joinable_event(s, int(flow.data["event_id"]))
     await state.clear_flow(s, user.id)
     if event is None:
-        return Safe(error or Messages.ERROR_SYSTEM)
+        return Safe(error or Messages.ERROR_SYSTEM), []
+    await seasons.lock_event(s, event)
     if await seasons.find_participant(s, event.id, user.id) is not None:
-        return Safe(Messages.ERROR_ALREADY_REGISTERED)
+        return Safe(Messages.ERROR_ALREADY_REGISTERED), []
     name = str(flow.data["name"])
-    await seasons.add_participant(s, event, user.id, user.username, name, wishlist)
-    logger.info("Registered user_id=%s in event_id=%s", user.id, event.id)
-    return render(Messages.REGISTRATION_COMPLETE, name=name, wishlist=wishlist)
+    participant = await seasons.add_participant(s, event, user.id, user.username, name, wishlist)
+    if event.status != EventStatus.DRAWN:
+        logger.info("Registered user_id=%s in event_id=%s", user.id, event.id)
+        return render(Messages.REGISTRATION_COMPLETE, name=name, wishlist=wishlist), []
+
+    try:
+        reassigned = await seasons.splice_late_participant(s, event, participant)
+    except ImpossibleDraw:
+        await s.delete(participant)
+        await s.flush()
+        return Safe(Messages.LATE_JOIN_IMPOSSIBLE), []
+    logger.info("Late registration user_id=%s spliced into event_id=%s", user.id, event.id)
+    notices = reassignment_notices(reassigned, event.group, newcomer_id=participant.id)
+    # the newcomer's own assignment arrives right after the confirmation
+    notices.sort(key=lambda n: n.telegram_id != user.id)
+    return render(Messages.REGISTRATION_COMPLETE_LATE, name=name, wishlist=wishlist), notices
 
 
 async def reuse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, kind: str, event_id: int) -> None:
@@ -128,8 +147,10 @@ async def reuse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, kin
             await query.answer(Messages.STALE_BUTTON)
             return
         await query.answer()
+        notices: list[Notice] = []
         if kind == "rn":
             text, markup = await on_name(s, update, flow, previous.real_name)
         else:
-            text, markup = await on_wishlist(s, update, flow, previous.wishlist), None
+            (text, notices), markup = await on_wishlist(s, update, flow, previous.wishlist), None
     await context.bot.send_message(chat_id=user.id, text=text, reply_markup=markup)
+    await deliver(context.bot, notices)

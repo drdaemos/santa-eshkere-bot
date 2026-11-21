@@ -54,9 +54,6 @@ async def join_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if event is None:
             await _reply(update, Messages.NO_SEASON)
             return
-        if event.status == EventStatus.DRAWN:
-            await _reply(update, Messages.JOIN_AFTER_DRAW)
-            return
         if await seasons.find_participant(s, event.id, user.id) is not None:
             await _reply(update, Messages.ERROR_ALREADY_REGISTERED)
             return

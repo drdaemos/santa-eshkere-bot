@@ -139,16 +139,6 @@ async def test_kickoff_twice_explains_instead_of_reshuffling(world, office):
     assert "уже сделано" in out.texts[-1]
 
 
-async def test_join_after_draw_is_refused_with_explanation(world, office):
-    group, admin, _ = await seeded(world, office)
-    await admin.send(group, "/kickitoff")
-    late = world.user("Late")
-    group.add(late)
-    await late.dm("/start")
-    out = await late.send(group, "/join")
-    assert "уже прошло" in out.texts[-1]
-
-
 async def test_redeploy_mid_registration_resumes_on_start(world, office):
     group, admin = office
     await admin.send(group, "/start")

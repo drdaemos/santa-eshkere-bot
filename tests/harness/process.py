@@ -21,6 +21,8 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from .fake_bot_api import FakeBotAPI
 from .scenario import TEST_TOKEN, Outcome
 from .server import FakeTelegramServer
@@ -101,18 +103,23 @@ class BotProcess:
                 raise RuntimeError("bot exited during startup:\n" + "\n".join(self.lines[-40:]))
             if self.mode == "polling" and self.server.get_updates_seen.is_set():
                 return
-            if self.mode == "webhook" and self.server.webhook_url and await self._port_open():
+            # the same readiness signal Railway's healthcheck uses
+            if self.mode == "webhook" and self.server.webhook_url and await self.health() == 200:
                 return
             await asyncio.sleep(0.05)
         raise TimeoutError("bot did not become ready:\n" + "\n".join(self.lines[-40:]))
 
-    async def _port_open(self) -> bool:
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    async def health(self) -> int | None:
+        """Status code of GET /health, or None if nothing is listening yet."""
         try:
-            _, writer = await asyncio.open_connection("127.0.0.1", self.port)
-        except OSError:
-            return False
-        writer.close()
-        return True
+            async with httpx.AsyncClient(timeout=2) as client:
+                return (await client.get(f"{self.url}/health")).status_code
+        except httpx.HTTPError:
+            return None
 
     async def kill(self) -> None:
         """Hard kill, like a container being replaced mid-flight."""

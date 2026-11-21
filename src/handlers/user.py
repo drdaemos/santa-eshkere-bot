@@ -1,19 +1,21 @@
-"""Participant DM commands and text routing: /start, /status, /wishlist, /cancel"""
+"""Participant DM commands and text routing: /start, /status, /wishlist, /leave, /cancel"""
 
 import logging
 import re
 
-from telegram import Update
+from sqlalchemy.ext.asyncio import AsyncSession
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from ..database.models import EventStatus
+from ..database.models import EventStatus, Participant
 from ..database.session import session_scope
 from ..formatting import Safe, join, render, truncate
 from ..messages import Messages
 from ..services import seasons, state
-from ..services.notifications import send_dm, wishlist_text
+from ..services.assignment import ImpossibleDraw, NotEnoughParticipants
+from ..services.notifications import Notice, deliver, post, reassignment_notices, send_dm, wishlist_text
 from ..utils.auth import require_private_chat
-from ..validation import ValidationError, clean_wishlist
+from ..validation import ValidationError, callback, clean_wishlist
 from . import registration
 
 logger = logging.getLogger(__name__)
@@ -148,16 +150,19 @@ async def dm_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Free text in DM: feeds whichever flow is pending."""
     user, message = update.effective_user, update.effective_message
     assert user is not None and message is not None and message.text is not None
+    notices: list[Notice] = []
     async with session_scope() as s:
         flow = await state.get_flow(s, user.id)
         if flow.name == state.REG_NAME:
             reply = await registration.on_name(s, update, flow, message.text)
         elif flow.name == state.REG_WISHLIST:
-            reply = (await registration.on_wishlist(s, update, flow, message.text), None)
+            text, notices = await registration.on_wishlist(s, update, flow, message.text)
+            reply = (text, None)
         else:
             reply = None
     if reply is not None:
         await _reply(update, *reply)
+        await deliver(context.bot, notices)
     elif flow.name == state.EDIT_WISHLIST:
         await _update_wishlist(update, context, flow, message.text)
     else:
@@ -171,3 +176,86 @@ async def dm_non_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     async with session_scope() as s:
         flow = await state.get_flow(s, user.id)
     await _reply(update, Messages.NEED_TEXT if flow.name else Messages.USER_HELP)
+
+
+# --- /leave -------------------------------------------------------------------
+
+
+def _leave_confirm(group_title: str, drawn: bool, participant_id: int) -> tuple[Safe, InlineKeyboardMarkup]:
+    text = render(Messages.LEAVE_CONFIRM, group_name=group_title, drawn_note=Messages.DRAWN_REPAIR_NOTE if drawn else "")
+    markup = InlineKeyboardMarkup(
+        [[
+            InlineKeyboardButton(Messages.CONFIRM_YES_BUTTON, callback_data=callback("lv", participant_id)),
+            InlineKeyboardButton(Messages.CONFIRM_NO_BUTTON, callback_data=callback("cx")),
+        ]]
+    )
+    return text, markup
+
+
+@require_private_chat
+async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    assert user is not None
+    async with session_scope() as s:
+        memberships = await seasons.current_memberships(s, user.id)
+    if not memberships:
+        await _reply(update, Messages.ERROR_NOT_REGISTERED)
+        return
+    if len(memberships) == 1:
+        m = memberships[0]
+        await _reply(update, *_leave_confirm(m.group.title, m.event.status == EventStatus.DRAWN, m.participant.id))
+        return
+    markup = InlineKeyboardMarkup(
+        [[InlineKeyboardButton(truncate(m.group.title, 60), callback_data=callback("lq", m.participant.id))] for m in memberships]
+    )
+    await _reply(update, Messages.LEAVE_PICK_GROUP, markup)
+
+
+async def _own_membership(s: AsyncSession, update: Update, participant_id: int) -> seasons.Membership | None:
+    """The clicking user's membership behind a button, or None (answers the query)."""
+    query, user = update.callback_query, update.effective_user
+    assert query is not None and user is not None
+    membership = next((m for m in await seasons.current_memberships(s, user.id) if m.participant.id == participant_id), None)
+    if membership is None:  # someone else's participant id, or the season is over
+        await query.answer(Messages.STALE_BUTTON, show_alert=True)
+    return membership
+
+
+async def on_leave_pick(update: Update, context: ContextTypes.DEFAULT_TYPE, participant_id: int) -> None:
+    query = update.callback_query
+    assert query is not None
+    async with session_scope() as s:
+        m = await _own_membership(s, update, participant_id)
+        if m is None:
+            return
+        text, markup = _leave_confirm(m.group.title, m.event.status == EventStatus.DRAWN, m.participant.id)
+    await query.answer()
+    await query.edit_message_text(text, reply_markup=markup)
+
+
+async def on_leave_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, participant_id: int) -> None:
+    query, user = update.callback_query, update.effective_user
+    assert query is not None and user is not None
+    async with session_scope() as s:
+        m = await _own_membership(s, update, participant_id)
+        if m is None:
+            return
+        participant: Participant = m.participant
+        name, group_title, chat_id = participant.real_name, m.group.title, m.group.telegram_chat_id
+        try:
+            reassigned = await seasons.remove_participant(s, m.event, participant)
+        except NotEnoughParticipants:
+            await query.answer()
+            await query.edit_message_text(Safe(Messages.REPAIR_TOO_FEW))
+            return
+        except ImpossibleDraw:
+            await query.answer()
+            await query.edit_message_text(Safe(Messages.REPAIR_IMPOSSIBLE))
+            return
+        notices = reassignment_notices(reassigned, m.group)
+    logger.info("user_id=%s left event_id=%s (%s reassigned)", user.id, m.event.id, len(reassigned))
+    await query.answer()
+    await query.edit_message_text(render(Messages.LEFT_SEASON, group_name=group_title))
+    notice = Messages.PARTICIPANT_LEFT_REPAIRED if reassigned else Messages.PARTICIPANT_LEFT
+    await post(context.bot, chat_id, render(notice, name=name))
+    await deliver(context.bot, notices)

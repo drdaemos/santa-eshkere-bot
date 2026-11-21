@@ -7,12 +7,13 @@ thin and this module can be tested without the bot.
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from ..database.models import Assignment, Event, EventStatus, Exclusion, Group, Participant
-from .assignment import generate_assignments
+from .assignment import generate_assignments, repair_without, splice_in
 
 # --- groups -------------------------------------------------------------------
 
@@ -229,12 +230,20 @@ async def plan_draw(s: AsyncSession, event: Event) -> tuple[list[tuple[Participa
     Raises NotEnoughParticipants / ImpossibleDraw.
     """
     people = await participants(s, event.id)
-    by_tg = {p.telegram_id: p for p in people}
-    rules = [r for r in await group_rules(s, event.group_id) if r.telegram_id_a in by_tg and r.telegram_id_b in by_tg]
     by_id = {p.id: p for p in people}
-    forbidden = [(by_tg[r.telegram_id_a].id, by_tg[r.telegram_id_b].id) for r in rules]
+    forbidden = await _forbidden_ids(s, event, people)
     pairs = generate_assignments([p.id for p in people], forbidden)
-    return [(by_id[g], by_id[r]) for g, r in pairs], len(rules)
+    return [(by_id[g], by_id[r]) for g, r in pairs], len(forbidden)
+
+
+async def _forbidden_ids(s: AsyncSession, event: Event, people: list[Participant]) -> list[tuple[int, int]]:
+    """The group's rules as participant-id pairs, for people in this season."""
+    by_tg = {p.telegram_id: p for p in people}
+    return [
+        (by_tg[r.telegram_id_a].id, by_tg[r.telegram_id_b].id)
+        for r in await group_rules(s, event.group_id)
+        if r.telegram_id_a in by_tg and r.telegram_id_b in by_tg
+    ]
 
 
 async def draw(s: AsyncSession, event: Event) -> list[Assignment]:
@@ -264,3 +273,80 @@ async def mark_delivered(s: AsyncSession, assignment_ids: list[int]) -> None:
     now = datetime.now()
     for assignment in result.scalars().all():
         assignment.delivered_at = now
+
+
+# --- changes after the draw ---------------------------------------------------
+#
+# Invariant: in a drawn season every participant gives exactly once and
+# receives exactly once. Leaving and late joining keep it, rewiring as few
+# Santas as possible (services.assignment.repair_without / splice_in).
+
+
+async def lock_event(s: AsyncSession, event: Event) -> None:
+    """Serialize changes to one season (SELECT ... FOR UPDATE on Postgres; SQLite
+    already serializes writers) and re-read its status.
+
+    Only the status column is re-read: a full refresh would expire relationships
+    that the async session can't lazy-load later."""
+    status = (await s.execute(select(Event.status).where(Event.id == event.id).with_for_update())).scalar_one()
+    set_committed_value(event, "status", status)
+
+
+@dataclass
+class Reassignment:
+    """A giver whose assignment is new (a Santa who must be told)."""
+
+    assignment_id: int
+    giver: Participant
+    receiver: Participant
+
+
+async def _rewire(
+    s: AsyncSession, event: Event, people: list[Participant], changes: dict[int, int], leaver_id: int | None = None
+) -> list[Reassignment]:
+    links = Assignment.giver_id.in_(list(changes))
+    if leaver_id is not None:
+        links = or_(links, Assignment.giver_id == leaver_id, Assignment.receiver_id == leaver_id)
+    # delete first, then insert: the unique (event, giver) / (event, receiver)
+    # constraints hold after every statement
+    await s.execute(delete(Assignment).where(Assignment.event_id == event.id, links))
+    await s.flush()
+    rows = [Assignment(event_id=event.id, giver_id=g, receiver_id=r) for g, r in changes.items()]
+    s.add_all(rows)
+    await s.flush()
+    by_id = {p.id: p for p in people}
+    return [Reassignment(row.id, by_id[row.giver_id], by_id[row.receiver_id]) for row in rows]
+
+
+async def remove_participant(s: AsyncSession, event: Event, participant: Participant) -> list[Reassignment]:
+    """Remove someone from the season; in a drawn season, repair the chain.
+
+    Raises NotEnoughParticipants / ImpossibleDraw (before changing anything)
+    when a drawn season can't be repaired.
+    """
+    await lock_event(s, event)
+    reassigned: list[Reassignment] = []
+    if event.status == EventStatus.DRAWN:
+        pairs = {a.giver_id: a.receiver_id for a in await assignments(s, event.id)}
+        if participant.id in pairs:
+            people = await participants(s, event.id)
+            changes = repair_without(pairs, participant.id, await _forbidden_ids(s, event, people))
+            reassigned = await _rewire(s, event, people, changes, leaver_id=participant.id)
+    await s.execute(
+        delete(Assignment).where(or_(Assignment.giver_id == participant.id, Assignment.receiver_id == participant.id))
+    )
+    await s.delete(participant)
+    await s.flush()
+    return reassigned
+
+
+async def splice_late_participant(s: AsyncSession, event: Event, participant: Participant) -> list[Reassignment]:
+    """Fit a just-added participant into a drawn season's chain.
+
+    Returns the two new assignments (an existing Santa's and the newcomer's).
+    Raises ImpossibleDraw when the rules leave no place; nothing is changed then.
+    """
+    pairs = {a.giver_id: a.receiver_id for a in await assignments(s, event.id)}
+    people = await participants(s, event.id)
+    changes = splice_in(pairs, participant.id, await _forbidden_ids(s, event, people))
+    return await _rewire(s, event, people, changes)
