@@ -291,7 +291,7 @@ then run the suite with the printed `TEST_DATABASE_URL=...` set. The test
 database is wiped per test, so never point it at real data.
 
 CI (`.github/workflows/tests.yml`) runs lint and the full suite on SQLite and
-on Postgres 17 for every push to `main` and every PR.
+on Postgres 17 for every push (any branch) and every PR.
 
 Tests marked `known_bug` are strict xfails for reproduced-but-unfixed bugs;
 when a fix makes one pass, the run fails until the marker is removed.

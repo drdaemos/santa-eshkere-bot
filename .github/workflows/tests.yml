@@ -1,8 +1,9 @@
 name: tests
 
 on:
+  # every branch, so a pushed work branch is checked before it reaches main
+  # (pushing main deploys on Railway)
   push:
-    branches: [main]
   pull_request:
 
 jobs:
