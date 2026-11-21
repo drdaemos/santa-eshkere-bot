@@ -24,6 +24,8 @@ class Config:
 
     # Webhook Settings (for Railway deployment)
     WEBHOOK_URL: str = os.getenv("WEBHOOK_URL", "")
+    # Optional; when empty a secret is derived from the bot token (see main.webhook_secret)
+    WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", "")
     PORT: int = int(os.getenv("PORT", "8000"))
 
     # Runtime mode

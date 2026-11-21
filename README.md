@@ -250,13 +250,33 @@ alembic history
 - Check `DATABASE_URL` is set correctly
 - For Railway, ensure PostgreSQL plugin is added
 
+## Testing
+
+The suite drives the real `Application` (handlers, filters, routing) through an
+in-process fake Telegram Bot API (`tests/harness/`). The fake enforces the
+server rules real users trip over: Markdown/HTML entity parsing, the 4096-char
+limit, "bot can't initiate conversation", "message is not modified", 64-byte
+callback data. Scenarios read like chat transcripts (`alice.send(group, "/join")`,
+`admin.click(msg, "Алиса")`, `harness.restart()` to simulate a redeploy).
+
+Tests marked `known_bug` are strict xfails documenting current real-usage
+failures. When a fix makes one pass, the run fails until the marker is removed.
+
+```bash
+uv run pytest                      # SQLite, fresh DB per test, built via Alembic
+uv run pytest -m known_bug -rx     # list the documented failures
+TEST_DATABASE_URL=postgresql://... uv run pytest   # disposable Postgres (wiped per test)
+```
+
+On Windows set `PYTHONUTF8=1` if you print Russian text from tests.
+
 ## Development
 
 ```bash
 # Run in development mode
 uv run python bot.py
 
-# Run tests (when added)
+# Run tests
 uv run pytest
 
 # Format code

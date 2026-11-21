@@ -1,0 +1,10 @@
+# Railway config-as-code. Values here override the dashboard settings.
+# --no-sync: the image is built with `uv sync --no-dev`; a plain `uv run`
+# would re-sync (and install dev deps) on every container start.
+
+[build]
+builder = "RAILPACK"
+
+[deploy]
+preDeployCommand = ["uv run --no-sync alembic upgrade head"]
+startCommand = "uv run --no-sync python bot.py"

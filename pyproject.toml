@@ -12,18 +12,21 @@ dependencies = [
     "python-dotenv>=1.0",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
-    "black>=24.0",
+    "hypothesis>=6.100",
     "ruff>=0.1",
 ]
 
-[tool.uv]
-dev-dependencies = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "known_bug: documents a real-usage failure in the current code (xfail until fixed)",
 ]
 
 [tool.ruff]
