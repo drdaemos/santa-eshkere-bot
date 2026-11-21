@@ -59,7 +59,9 @@ The bot will start in polling mode using SQLite database for local development.
 
 1. **Activate the bot in your group:**
    - Add the bot to your Telegram group
-   - Send `/start` in the group (admin only)
+   - Send `/start` in the group (admin only). The bot posts the **join post**:
+     a "🎁 Участвовать" button and the live list of who is in. Pin it if you
+     like. Sending `/start` again re-posts it at the bottom of the chat.
 
 2. **Manage from DM:**
    - Send `/listgroups` to see all active groups
@@ -76,18 +78,25 @@ The bot will start in polling mode using SQLite database for local development.
 
 ### For Participants
 
-1. **Join:**
-   - Send `/join` in the group chat
-   - Bot will DM you to collect your name and wishlist
+Participants never need a command:
 
-2. **Update wishlist:**
-   - Send `/wishlist` in DM with the bot
+1. **Join:** tap "🎁 Участвовать" on the join post. It opens the DM with the
+   bot (Telegram shows a Start button the first time). Pick the name with one
+   tap (Telegram name, or last season's) or type one, then send a wishlist.
+   `/join` in the group still works.
+2. **Change the wishlist:** just send the new text to the bot and confirm, or
+   use the "✏️ Изменить вишлист" button (or `/wishlist`).
+3. **Check status:** `/status`, or tap the join button again.
+4. **Leave:** the "🚪 Выйти из игры" button (or `/leave`).
 
-3. **Check status:**
-   - Send `/status` in DM to see your registration and assignment
-
-4. **Leave:**
-   - Send `/leave` in DM
+Design rules behind this:
+- **Quiet group:** joining, leaving and changes after the draw only edit the
+  join post. The bot posts in the group just for `/kickitoff` and when it
+  can't reach someone by DM.
+- **Hard to get wrong:** answered prompts lose their buttons, old buttons are
+  harmless, text sent outside a step is offered as a wishlist (small talk
+  isn't), and a forwarded join link only works for members of the group.
+- Typing `/` shows a short command menu per chat type (DM, group, group admins).
 
 ### Changes after the draw
 
@@ -292,7 +301,7 @@ Two layers share that DSL:
 
 | Layer | Where | What it proves |
 |---|---|---|
-| in-process (`tests/flows`, most tests) | real `Application`, fake HTTP transport | every flow and edge case, fast (~20 s for ~270 tests) |
+| in-process (`tests/flows`, most tests) | real `Application`, fake HTTP transport | every flow and edge case, fast (~25 s for ~290 tests) |
 | process e2e (`tests/e2e`, marker `e2e`) | `bot.py` as its own OS process, talking HTTP to `tests/harness/server.py` | deploy-shaped startup (pre-deploy command from `railway.toml`, env-only config), polling and webhook modes, webhook secret enforcement, the `/health` endpoint Railway checks, surviving a killed process |
 
 ```bash

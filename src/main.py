@@ -5,7 +5,14 @@ import hashlib
 import logging
 import sys
 
-from telegram import Update
+from telegram import (
+    Bot,
+    BotCommand,
+    BotCommandScopeAllChatAdministrators,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    Update,
+)
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import (
@@ -62,6 +69,42 @@ async def post_init(application: Application) -> None:
     await init_db()
     logger.info("Database initialized")
     logger.info(f"Bot username: @{(await application.bot.get_me()).username}")
+    await set_command_menus(application.bot)
+
+
+# What Telegram shows when someone types "/" (per chat type). Participants
+# only see what they need; admin DM commands stay in /adminhelp.
+COMMAND_MENUS: dict[str, list[tuple[str, str]]] = {
+    "private": [
+        ("status", "Мой статус и задание"),
+        ("wishlist", "Изменить вишлист"),
+        ("leave", "Выйти из игры"),
+        ("cancel", "Отменить текущее действие"),
+        ("adminhelp", "Команды для админов групп"),
+    ],
+    "groups": [
+        ("join", "Участвовать в Тайном Санте"),
+    ],
+    "group_admins": [
+        ("join", "Участвовать в Тайном Санте"),
+        ("start", "Включить бота и показать кнопку участия"),
+        ("kickitoff", "Запустить распределение"),
+        ("newseason", "Закрыть сезон и открыть новый"),
+    ],
+}
+
+
+async def set_command_menus(bot: Bot) -> None:
+    scopes = {
+        "private": BotCommandScopeAllPrivateChats(),
+        "groups": BotCommandScopeAllGroupChats(),
+        "group_admins": BotCommandScopeAllChatAdministrators(),
+    }
+    for name, commands in COMMAND_MENUS.items():
+        try:
+            await bot.set_my_commands([BotCommand(c, d) for c, d in commands], scope=scopes[name])
+        except TelegramError as e:  # cosmetic: never block startup on it
+            logger.warning("Setting the %s command menu failed: %s", name, e.__class__.__name__)
 
 
 async def post_shutdown(application: Application) -> None:

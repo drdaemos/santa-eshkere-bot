@@ -12,10 +12,11 @@ from ..formatting import Safe, join, render
 from ..messages import Messages
 from ..services import seasons, state
 from ..services.assignment import ImpossibleDraw, NotEnoughParticipants
+from ..services.join_post import join_link, post_join_message, refresh_join_message
 from ..services.notifications import assignment_text, send_dm
 from ..utils.auth import is_group_admin, require_group_chat
 from ..validation import CONFIRM_CODES, callback
-from .registration import name_prompt
+from .registration import already_in, name_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +27,17 @@ async def _reply(update: Update, text: str, markup: InlineKeyboardMarkup | None 
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Activate the bot in this group; opens a season if there is none."""
+    """Activate the bot in this group (opening a season if there is none) and
+    post the join post. Sent again, it re-posts the join post at the bottom."""
     chat = update.effective_chat
     if chat is None or not await is_group_admin(update, context):
         await _reply(update, Messages.ERROR_ADMIN_ONLY)
         return
     async with session_scope() as s:
-        await seasons.activate_group(s, chat.id, chat.title or "")
+        _, event = await seasons.activate_group(s, chat.id, chat.title or "")
+        event_id = event.id
     logger.info("Group activated chat_id=%s", chat.id)
-    await _reply(update, Messages.WELCOME)
+    await post_join_message(context.bot, event_id)
 
 
 @require_group_chat
@@ -54,21 +57,25 @@ async def join_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if event is None:
             await _reply(update, Messages.NO_SEASON)
             return
-        if await seasons.find_participant(s, event.id, user.id) is not None:
-            await _reply(update, Messages.ERROR_ALREADY_REGISTERED)
-            return
-        await state.set_flow(s, user.id, state.REG_NAME, event_id=event.id)
-        text, markup = await name_prompt(s, group, event, user.id)
+        existing = await seasons.find_participant(s, event.id, user.id)
+        if existing is not None:
+            text, markup = already_in(group, existing)
+        else:
+            await state.set_flow(s, user.id, state.REG_NAME, event_id=event.id)
+            text, markup = await name_prompt(s, group, event, user)
         event_id = event.id
 
+    # Everything happens in DM; the group only hears from the bot when the DM
+    # is impossible.
     try:
         await context.bot.send_message(chat_id=user.id, text=text, reply_markup=markup)
     except Forbidden:
-        # The user never opened a DM with the bot. A deep link opens it and
-        # resumes registration via /start join_<event_id>.
-        link = f"https://t.me/{context.bot.username}?start=join_{event_id}"
-        button = InlineKeyboardMarkup([[InlineKeyboardButton(Messages.JOIN_DM_BUTTON, url=link)]])
-        await _reply(update, Messages.JOIN_DM_FAILED, button)
+        # The user never opened a DM with the bot (or blocked it). The deep
+        # link opens it and resumes registration via /start join_<event_id>.
+        button = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(Messages.JOIN_DM_BUTTON, url=join_link(context.bot.username, event_id))]]
+        )
+        await _reply(update, render(Messages.JOIN_DM_FAILED, name=user.first_name), button)
     except TelegramError:
         logger.exception("Could not send registration DM to user_id=%s", user.id)
         await _reply(update, Messages.ERROR_SYSTEM)
@@ -118,6 +125,7 @@ async def kickitoff_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     logger.info("Draw for event_id=%s: delivered %s/%s", event_id, len(delivered), len(deliveries))
     await _reply(update, Messages.ASSIGNMENTS_SENT)
+    await refresh_join_message(context.bot, event_id)
     if failed_names:
         await _reply(update, render(Messages.DELIVERY_FAILED, names=join(sorted(failed_names), sep=", ")))
 

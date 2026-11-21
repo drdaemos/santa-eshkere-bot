@@ -153,6 +153,12 @@ class Actor:
         }
         return await self.world.harness.feed({"callback_query": query})
 
+    async def tap_join(self, group: "Group") -> Outcome:
+        """Tap the join post's button: Telegram opens the DM and sends
+        /start join_<event_id> (which also lets the bot message this user)."""
+        url = join_url(join_post(group))
+        return await self.dm(f"/start {url.split('start=', 1)[1]}")
+
     def block_bot(self) -> None:
         self.user.blocked_bot = True
 
@@ -245,6 +251,32 @@ async def select_group(admin: Actor, group: Group) -> None:
     """Admin picks `group` via /listgroups and its inline button."""
     await admin.dm("/listgroups")
     await admin.click(admin.last_dm, group.chat.title)
+
+
+def url_buttons(message: SentMessage) -> list[str]:
+    markup = message.reply_markup or {}
+    return [b["url"] for row in markup.get("inline_keyboard", []) for b in row if "url" in b]
+
+
+JOIN_BUTTON = "🎁 Участвовать"
+
+
+def join_post(group: Group) -> SentMessage:
+    """The group's current join post (the newest bot message with the join button)."""
+    posts = [m for m in group.feed if any(text == JOIN_BUTTON for text, _ in m.buttons)]
+    assert posts, f"no join post in {group.chat.title}: {[m.text[:40] for m in group.feed]}"
+    return posts[-1]
+
+
+def join_url(message: SentMessage) -> str:
+    return next(u for u in url_buttons(message) if "start=join_" in u)
+
+
+def listed(post: SentMessage) -> list[str]:
+    """Names in a join post's participant line."""
+    line = post.text.rsplit("\n", 1)[-1]
+    names = line.split(":", 1)[1].strip()
+    return [] if "пока никого" in names else [n.strip() for n in names.split(",")]
 
 
 ASSIGNMENT_MARKER = "Получает: "

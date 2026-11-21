@@ -4,6 +4,7 @@ Flows:
   reg_name       {"event_id"}                    waiting for the participant's name
   reg_wishlist   {"event_id", "name"}            waiting for the wishlist
   edit_wishlist  {"participant_ids": [...]}      /wishlist was sent
+  confirm_wishlist {"text"}                      free text sent: use it as the wishlist?
 """
 
 import json
@@ -17,6 +18,7 @@ from ..database.models import DmState
 REG_NAME = "reg_name"
 REG_WISHLIST = "reg_wishlist"
 EDIT_WISHLIST = "edit_wishlist"
+CONFIRM_WISHLIST = "confirm_wishlist"
 
 
 @dataclass

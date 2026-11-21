@@ -225,4 +225,4 @@ async def test_reset_clears_assignments(world, office_with_people):
     assert "сброшены" in confirm.text
     assert await db.assignments() == []
     await people["Алиса"].dm("/status")
-    assert "Ожидаем распределения" in people["Алиса"].last_dm.text
+    assert "Ждём, когда админ запустит распределение" in people["Алиса"].last_dm.text

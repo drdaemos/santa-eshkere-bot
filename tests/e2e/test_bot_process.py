@@ -17,7 +17,7 @@ import pytest
 
 from src.main import webhook_secret
 from tests.harness.process import ROOT, ProcessHarness
-from tests.harness.scenario import TEST_TOKEN, World, assignment_of, register
+from tests.harness.scenario import TEST_TOKEN, World, assignment_of, join_post, listed, register
 
 pytestmark = pytest.mark.e2e
 
@@ -59,6 +59,7 @@ async def test_deploy_runs_migrations_and_bot_starts(make_world):
     assert "Running upgrade" in world.harness.pre_deploy_output
     assert any("Application started" in line for line in world.harness.bot.lines)
     assert not any("api.telegram.org" in line or TEST_TOKEN in line for line in world.harness.bot.lines), "token leaked to logs"
+    assert set(world.api.command_menus) == {"all_private_chats", "all_group_chats", "all_chat_administrators"}
 
 
 async def test_full_season_over_http(make_world):
@@ -66,7 +67,7 @@ async def test_full_season_over_http(make_world):
     admin = world.user("Eugene", username="eugene")
     office = world.group("Office", owner=admin)
     await admin.send(office, "/start")
-    assert "/join" in office.feed[-1].text
+    assert "Участвуют (0)" in join_post(office).text
 
     # two people open the DM first, one joins cold and uses the deep link
     names = {"Алиса": "Alice", "Борис": "Boris", "Вера": "Vera", "Глеб": "Gleb"}
@@ -125,6 +126,7 @@ async def test_full_season_over_http(make_world):
     assert sorted(received.values()) == sorted(people), "still a complete draw without Глеб"
     assert all(giver != receiver for giver, receiver in received.items())
     assert received["Алиса"] != "Борис" and received["Борис"] != "Алиса"
+    assert sorted(listed(join_post(office))) == sorted(people), "the join post tracks who is in"
 
     # next season: a returning player rejoins in two taps
     await admin.send(office, "/newseason")

@@ -67,6 +67,10 @@ class Event(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     drawn_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # the group message with the join button and live participant list
+    join_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # digest of what that message shows now, so unchanged lists aren't re-sent
+    join_message_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     group: Mapped[Group] = relationship(back_populates="events")
     participants: Mapped[list["Participant"]] = relationship(back_populates="event", cascade="all, delete-orphan")

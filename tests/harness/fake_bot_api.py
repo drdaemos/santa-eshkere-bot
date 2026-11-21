@@ -14,6 +14,7 @@ rules that make real bots fail:
 
 import itertools
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -38,11 +39,14 @@ class FakeUser:
     id: int
     first_name: str
     username: str | None = None
+    last_name: str | None = None
     started_bot: bool = False  # user has opened a DM with the bot
     blocked_bot: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"id": self.id, "is_bot": False, "first_name": self.first_name}
+        if self.last_name:
+            d["last_name"] = self.last_name
         if self.username:
             d["username"] = self.username
         return d
@@ -128,6 +132,7 @@ class FakeBotAPI(BaseRequest):
         self.groups: dict[int, FakeGroup] = {}
         self.messages: dict[tuple[int, int], SentMessage] = {}
         self.calls: list[ApiCall] = []
+        self.command_menus: dict[str, list[str]] = {}  # scope type -> commands
         self._message_ids = itertools.count(1)
 
     # --- BaseRequest plumbing -------------------------------------------------
@@ -290,6 +295,36 @@ class FakeBotAPI(BaseRequest):
         if status == "kicked":
             return {"status": "kicked", "user": user_dict, "until_date": 0}
         return {"status": status, "user": user_dict}
+
+    def _api_editMessageReplyMarkup(self, params: dict[str, Any], call: ApiCall) -> dict[str, Any]:
+        chat_id = int(params["chat_id"])
+        msg = self.messages.get((chat_id, int(params["message_id"])))
+        if msg is None:
+            raise ApiError(400, "Bad Request: message to edit not found")
+        markup = params.get("reply_markup")
+        self._check_markup(markup)
+        if markup == msg.reply_markup or (not markup and not msg.reply_markup):
+            raise ApiError(400, "Bad Request: message is not modified")
+        msg.reply_markup = markup
+        call.message = msg
+        return msg.to_dict()
+
+    def _api_setMyCommands(self, params: dict[str, Any], call: ApiCall) -> bool:
+        commands = params["commands"]
+        if isinstance(commands, str):
+            commands = json.loads(commands)
+        if len(commands) > 100:
+            raise ApiError(400, "Bad Request: too many commands")
+        for c in commands:
+            if not re.fullmatch(r"[a-z0-9_]{1,32}", c["command"]):
+                raise ApiError(400, "Bad Request: BOT_COMMAND_INVALID")
+            if not 1 <= len(c["description"]) <= 256:
+                raise ApiError(400, "Bad Request: BOT_COMMAND_DESCRIPTION_INVALID")
+        scope = params.get("scope") or {"type": "default"}
+        if isinstance(scope, str):
+            scope = json.loads(scope)
+        self.command_menus[scope["type"]] = [c["command"] for c in commands]
+        return True
 
     def _api_setWebhook(self, params: dict[str, Any], call: ApiCall) -> bool:
         return True

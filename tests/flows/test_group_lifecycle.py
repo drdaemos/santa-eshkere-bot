@@ -2,13 +2,16 @@
 
 import time
 
-from tests.harness.scenario import assert_no_errors, register, select_group
+from tests.harness.scenario import assert_no_errors, join_post, join_url, listed, register, select_group
 
 
 async def test_admin_activates_bot_in_group(world, office):
     group, admin = office
     out = await admin.send(group, "/start")
-    assert any("/join" in m.text for m in out.sent_to(group.id))
+    [post] = out.sent_to(group.id)
+    assert post is join_post(group)
+    assert join_url(post).startswith("https://t.me/santa_eshkere_bot?start=join_")
+    assert listed(post) == []
     assert_no_errors(world)
 
 
@@ -55,7 +58,7 @@ async def test_disband_blocks_joining_and_start_reactivates(world, office):
     group.add(alice)
     await alice.dm("/start")
     out = await alice.send(group, "/join")
-    assert "неактивна" in out.texts[-1]
+    assert "выключен" in out.texts[-1]
 
     await admin.send(group, "/start")
     out = await alice.send(group, "/join")

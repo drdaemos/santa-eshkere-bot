@@ -76,6 +76,10 @@ _CALLBACK_SHAPES: dict[str, int] = {
     "cx": 0,  # cancel a confirmation
     "rn": 1,  # registration: reuse previous name: event_id
     "rw": 1,  # registration: reuse previous wishlist: event_id
+    "tn": 1,  # registration: use Telegram name: event_id
+    "ew": 0,  # edit wishlist (same as /wishlist)
+    "wy": 0,  # yes, use the text just sent as the new wishlist
+    "lw": 0,  # leave (same as /leave)
     "lq": 1,  # /leave, group picked: participant_id
     "lv": 1,  # /leave confirmed: participant_id
     "pp": 2,  # removeparticipant page: event_id, page
