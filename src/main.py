@@ -138,6 +138,7 @@ def build_application(
     token: str,
     *,
     request: BaseRequest | None = None,
+    base_url: str = "",
     with_lifecycle_hooks: bool = True,
 ) -> Application:
     """Build the bot Application.
@@ -149,6 +150,8 @@ def build_application(
     builder = Application.builder().token(token).defaults(Defaults(parse_mode=ParseMode.HTML))
     if request is not None:
         builder = builder.request(request).get_updates_request(request)
+    if base_url:
+        builder = builder.base_url(base_url)
     if with_lifecycle_hooks:
         builder = builder.post_init(post_init).post_shutdown(post_shutdown)
 
@@ -167,7 +170,9 @@ def main() -> None:
         logger.error(f"Configuration error: {e}")
         sys.exit(1)
 
-    application = build_application(config.TELEGRAM_BOT_TOKEN)
+    application = build_application(config.TELEGRAM_BOT_TOKEN, base_url=config.TELEGRAM_API_BASE_URL)
+    if config.TELEGRAM_API_BASE_URL:
+        logger.warning("Using a non-Telegram Bot API server (tests only)")
 
     if config.USE_WEBHOOK:
         logger.info("Starting bot in webhook mode...")

@@ -154,6 +154,12 @@ class FakeBotAPI(BaseRequest):
     ) -> tuple[int, bytes]:
         api_method = url.rsplit("/", 1)[-1]
         params = dict(request_data.parameters) if request_data else {}
+        status, payload = self.dispatch(api_method, params)
+        return status, json.dumps(payload).encode()
+
+    def dispatch(self, api_method: str, params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        """Transport-independent core: one Bot API call -> (HTTP status, JSON body).
+        Used in-process (do_request above) and by the HTTP server (server.py)."""
         call = ApiCall(method=api_method, params=params)
         self.calls.append(call)
         handler = getattr(self, f"_api_{api_method}", None)
@@ -163,8 +169,8 @@ class FakeBotAPI(BaseRequest):
             result = handler(params, call)
         except ApiError as e:
             call.error = e.description
-            return e.status, json.dumps({"ok": False, "error_code": e.status, "description": e.description}).encode()
-        return 200, json.dumps({"ok": True, "result": result}).encode()
+            return e.status, {"ok": False, "error_code": e.status, "description": e.description}
+        return 200, {"ok": True, "result": result}
 
     # --- helpers --------------------------------------------------------------
 

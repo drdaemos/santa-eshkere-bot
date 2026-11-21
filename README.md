@@ -254,21 +254,47 @@ alembic history
 
 ## Testing
 
-The suite drives the real `Application` (handlers, filters, routing) through an
-in-process fake Telegram Bot API (`tests/harness/`). The fake enforces the
-server rules real users trip over: Markdown/HTML entity parsing, the 4096-char
-limit, "bot can't initiate conversation", "message is not modified", 64-byte
-callback data. Scenarios read like chat transcripts (`alice.send(group, "/join")`,
-`admin.click(msg, "Алиса")`, `harness.restart()` to simulate a redeploy).
+Everything runs against a **fake Telegram**: `tests/harness/fake_bot_api.py`
+models users, chats and memberships and enforces the server rules real users
+trip over: Markdown/HTML entity parsing, the 4096-char limit, "bot can't
+initiate conversation", blocked users, "message is not modified", 64-byte
+callback data. Scenarios read like chat transcripts:
 
-Tests marked `known_bug` are strict xfails documenting current real-usage
-failures. When a fix makes one pass, the run fails until the marker is removed.
+```python
+await alice.send(office, "/join")
+await alice.dm("Алиса")
+await admin.click(admin.last_dm, "Алиса")
+await world.harness.restart()
+```
+
+Two layers share that DSL:
+
+| Layer | Where | What it proves |
+|---|---|---|
+| in-process (`tests/flows`, most tests) | real `Application`, fake HTTP transport | every flow and edge case, fast (~10 s for ~200 tests) |
+| process e2e (`tests/e2e`, marker `e2e`) | `bot.py` as its own OS process, talking HTTP to `tests/harness/server.py` | deploy-shaped startup (pre-deploy command from `railway.toml`, env-only config), polling and webhook modes, webhook secret enforcement, surviving a killed process |
 
 ```bash
-uv run pytest                      # SQLite, fresh DB per test, built via Alembic
-uv run pytest -m known_bug -rx     # list the documented failures
-TEST_DATABASE_URL=postgresql://... uv run pytest   # disposable Postgres (wiped per test)
+uv run pytest                 # everything on SQLite (~45 s)
+uv run pytest -m "not e2e"    # fast loop
+uv run pytest -m e2e          # just the process-level journeys
 ```
+
+**Against Postgres** (what production runs, including the migration's
+Postgres-only branch). Without Docker, start a throwaway server:
+
+```bash
+uv run --no-project --python 3.12 --with pgserver scripts/local_postgres.py
+```
+
+then run the suite with the printed `TEST_DATABASE_URL=...` set. The test
+database is wiped per test, so never point it at real data.
+
+CI (`.github/workflows/tests.yml`) runs lint and the full suite on SQLite and
+on Postgres 17 for every push to `main` and every PR.
+
+Tests marked `known_bug` are strict xfails for reproduced-but-unfixed bugs;
+when a fix makes one pass, the run fails until the marker is removed.
 
 On Windows set `PYTHONUTF8=1` if you print Russian text from tests.
 

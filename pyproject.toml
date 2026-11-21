@@ -27,6 +27,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "known_bug: documents a real-usage failure in the current code (xfail until fixed)",
+    "e2e: runs the real bot as a separate process against the fake Telegram HTTP server",
 ]
 
 [tool.ruff]

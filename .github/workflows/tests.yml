@@ -1,0 +1,40 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: tests (${{ matrix.db }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
+    services:
+      postgres:
+        # same major version as the Railway database
+        image: postgres:17
+        env:
+          POSTGRES_USER: santa
+          POSTGRES_PASSWORD: santa
+          POSTGRES_DB: santa_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U santa"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TEST_DATABASE_URL: ${{ matrix.db == 'postgres' && 'postgresql://santa:santa@localhost:5432/santa_test' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff check src tests alembic
+      - run: uv run pytest -ra

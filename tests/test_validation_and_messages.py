@@ -83,5 +83,24 @@ def test_production_refuses_sqlite(monkeypatch):
     monkeypatch.setattr(Config, "USE_WEBHOOK", True)
     monkeypatch.setattr(Config, "WEBHOOK_URL", "https://santa.example")
     monkeypatch.setattr(Config, "DATABASE_URL", "sqlite+aiosqlite:///./db.db")
+    monkeypatch.setattr(Config, "ON_RAILWAY", False)
+    Config.validate()  # fine locally
+    monkeypatch.setattr(Config, "ON_RAILWAY", True)
     with pytest.raises(ValueError, match="Postgres"):
         Config.validate()
+
+
+@pytest.mark.parametrize(
+    ("url", "ok"),
+    [("https://santa.example", True), ("http://127.0.0.1:8443", True), ("http://localhost:1", True), ("http://santa.example", False), ("", False)],
+)
+def test_webhook_url_must_be_https_except_localhost(monkeypatch, url, ok):
+    monkeypatch.setattr(Config, "TELEGRAM_BOT_TOKEN", "x")
+    monkeypatch.setattr(Config, "USE_WEBHOOK", True)
+    monkeypatch.setattr(Config, "ON_RAILWAY", False)
+    monkeypatch.setattr(Config, "WEBHOOK_URL", url)
+    if ok:
+        Config.validate()
+    else:
+        with pytest.raises(ValueError, match="https"):
+            Config.validate()
