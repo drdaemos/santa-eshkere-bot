@@ -4,7 +4,6 @@ import pytest
 
 from tests.harness import db
 from tests.harness.scenario import assert_no_errors, register
-from tests.known_bugs import known_bug
 
 
 @pytest.fixture
@@ -30,7 +29,7 @@ async def test_full_registration(world, started):
     await alice.dm("Настолки, кофе, размер M")
     assert "ты в деле" in alice.last_dm.text
     assert "Алиса" in alice.last_dm.text
-    assert [u.wishlist for u in await db.users_named("Алиса")] == ["Настолки, кофе, размер M"]
+    assert [u.wishlist for u in await db.participants_named("Алиса")] == ["Настолки, кофе, размер M"]
     assert_no_errors(world)
 
 
@@ -106,7 +105,6 @@ REAL_WISHLISTS = [
 
 
 @pytest.mark.parametrize("wishlist", REAL_WISHLISTS)
-@known_bug("Wishlist is echoed in Markdown unescaped -> Telegram rejects the confirmation, or eats the underscores of a link")
 async def test_registration_confirms_any_wishlist_text(world, started, wishlist):
     group, _ = started
     alice = world.user("Alice")
@@ -116,7 +114,6 @@ async def test_registration_confirms_any_wishlist_text(world, started, wishlist)
     assert wishlist in alice.last_dm.text, "wishlist must be shown verbatim"
 
 
-@known_bug("A failed confirmation leaves registration state behind; the retry crashes on the unique constraint and the user is stuck")
 async def test_user_can_recover_after_confirmation_failure(world, started):
     group, _ = started
     alice = world.user("Alice")
@@ -127,7 +124,6 @@ async def test_user_can_recover_after_confirmation_failure(world, started):
     assert out.sent, "the user should get some answer"
 
 
-@known_bug("Name is echoed in Markdown unescaped")
 async def test_name_with_underscore(world, started):
     group, _ = started
     alice = world.user("Alice")
@@ -136,7 +132,6 @@ async def test_name_with_underscore(world, started):
     assert "ты в деле" in alice.last_dm.text
 
 
-@known_bug("No name validation: multi-line / 300-char names are accepted as-is")
 @pytest.mark.parametrize("name", ["Алиса\nкупите\nслона", "А" * 300], ids=["multiline", "very-long"])
 async def test_unreasonable_name_is_rejected(world, started, name):
     group, _ = started
@@ -148,7 +143,6 @@ async def test_unreasonable_name_is_rejected(world, started, name):
     assert "вишлист" not in alice.last_dm.text, "should ask for the name again"
 
 
-@known_bug("No length limit: a 4000-char wishlist cannot be echoed (or later delivered) within Telegram's 4096 limit")
 async def test_oversized_wishlist_is_rejected_up_front(world, started):
     group, _ = started
     alice = world.user("Alice")
@@ -160,7 +154,6 @@ async def test_oversized_wishlist_is_rejected_up_front(world, started):
     assert out.sent and not out.failed, "bot should answer (e.g. 'too long, shorten it')"
 
 
-@known_bug("Stickers/photos/voice during registration are silently ignored")
 async def test_non_text_wishlist_gets_a_hint(world, started):
     group, _ = started
     alice = world.user("Alice")
@@ -172,7 +165,6 @@ async def test_non_text_wishlist_gets_a_hint(world, started):
     assert out.sent, "bot should ask for a text wishlist"
 
 
-@known_bug("Registration state lives in user_data; Railway has no volume, so a redeploy mid-registration silently drops the user")
 async def test_registration_survives_redeploy(world, started):
     group, _ = started
     alice = world.user("Alice")
@@ -187,14 +179,12 @@ async def test_registration_survives_redeploy(world, started):
     assert out.sent, "user got no answer at all after the redeploy"
 
 
-@known_bug("Free text with no pending flow is silently ignored")
 async def test_stray_dm_gets_a_hint(world):
     alice = world.user("Alice")
     out = await alice.dm("привет, а как участвовать?")
     assert out.sent
 
 
-@known_bug("No /cancel: after /wishlist the next text always overwrites the wishlist")
 async def test_wishlist_edit_can_be_cancelled(world, started):
     group, _ = started
     alice = world.user("Alice")
@@ -204,4 +194,4 @@ async def test_wishlist_edit_can_be_cancelled(world, started):
     out = await alice.dm("/cancel")
     assert out.sent
     await alice.dm("ой, это не вишлист")
-    assert [u.wishlist for u in await db.users_named("Алиса")] == ["книги"]
+    assert [u.wishlist for u in await db.participants_named("Алиса")] == ["книги"]

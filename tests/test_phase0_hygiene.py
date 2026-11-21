@@ -44,7 +44,7 @@ async def test_error_log_does_not_contain_message_text(harness, caplog):
         harness.app.bot,
     )
     with caplog.at_level(logging.ERROR, logger="src.main"):
-        await error_handler(update, SimpleNamespace(error=RuntimeError("boom")))
+        await error_handler(update, SimpleNamespace(error=RuntimeError("boom"), bot=harness.app.bot))
     assert "секретный" not in caplog.text
     assert "update_id=1" in caplog.text and "user_id=42" in caplog.text
 

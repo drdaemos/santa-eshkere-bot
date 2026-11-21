@@ -3,7 +3,6 @@
 import time
 
 from tests.harness.scenario import assert_no_errors, register, select_group
-from tests.known_bugs import known_bug
 
 
 async def test_admin_activates_bot_in_group(world, office):
@@ -48,8 +47,8 @@ async def test_disband_blocks_joining_and_start_reactivates(world, office):
     await select_group(admin, group)
 
     await admin.dm("/disband")
-    assert "(да/нет)" in admin.last_dm.text
-    await admin.dm("да")
+    assert "Продолжить?" in admin.last_dm.text
+    await admin.click(admin.last_dm, "Да")
     assert "расформирована" in admin.last_dm.text
 
     alice = world.user("Alice")
@@ -69,13 +68,13 @@ async def test_disband_answer_other_than_yes_cancels(world, office):
     await admin.send(group, "/start")
     await select_group(admin, group)
     await admin.dm("/disband")
-    await admin.dm("нет")
-    assert "Отменено" in admin.last_dm.text
+    confirm = admin.last_dm
+    await admin.click(confirm, "Нет")
+    assert "Отменено" in confirm.text
     await admin.dm("/listgroups")
     assert "Office" in admin.last_dm.text
 
 
-@known_bug("Group name is put into Markdown unescaped: a '_' in the title breaks /listgroups entirely")
 async def test_group_with_underscore_in_title_is_listed(world):
     admin = world.user("Eugene")
     group = world.group("Santa_2026", owner=admin)
@@ -84,7 +83,6 @@ async def test_group_with_underscore_in_title_is_listed(world):
     assert "Santa_2026" in admin.last_dm.text
 
 
-@known_bug("ASK_NAME embeds the group title in Markdown; the DM fails and the user is wrongly told the bot can't write to them")
 async def test_join_works_in_group_with_underscore_in_title(world):
     admin = world.user("Eugene")
     group = world.group("Santa_2026", owner=admin)
@@ -96,7 +94,6 @@ async def test_join_works_in_group_with_underscore_in_title(world):
     assert "имя" in alice.last_dm.text
 
 
-@known_bug("Basic group -> supergroup migration changes chat_id; the bot loses the group and everyone in it")
 async def test_group_survives_supergroup_migration(world, office):
     group, admin = office
     group.chat.type = "group"

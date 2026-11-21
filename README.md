@@ -19,13 +19,7 @@ A Telegram bot for organizing company Secret Santa with exclusion rules (e.g., s
 2. Send `/newbot` and follow the instructions
 3. Save the bot token you receive
 
-### 2. Get Your Telegram ID
-
-1. Talk to [@userinfobot](https://t.me/userinfobot) on Telegram
-2. Send any message and it will reply with your user ID
-3. Save this ID - you'll need it as the admin ID
-
-### 3. Install Dependencies
+### 2. Install Dependencies
 
 ```bash
 # Install uv if you don't have it
@@ -35,25 +29,23 @@ pip install uv
 uv sync
 ```
 
-### 4. Configure Environment
+### 3. Configure Environment
 
 ```bash
 # Copy the example environment file
 cp .env.example .env
 
-# Edit .env and add your values:
-# - TELEGRAM_BOT_TOKEN (from BotFather)
-# - ADMIN_TELEGRAM_ID (from userinfobot)
+# Edit .env and set TELEGRAM_BOT_TOKEN (from BotFather)
 ```
 
-### 5. Run Database Migrations
+### 4. Run Database Migrations
 
 ```bash
 # Apply database migrations
 alembic upgrade head
 ```
 
-### 6. Run the Bot
+### 5. Run the Bot
 
 ```bash
 uv run python bot.py
@@ -96,19 +88,24 @@ The bot will start in polling mode using SQLite database for local development.
 
 ## Admin Commands
 
+Admins are the Telegram admins of each group; rights are re-checked with
+Telegram on every command and button press.
+
 ### In Group Chat
-- `/start` - Activate bot (admin only)
-- `/kickitoff` - Generate and send assignments (admin only)
+- `/start` - Activate bot (admin only); opens a season if none is running
+- `/kickitoff` - Draw and send assignments (admin only; refuses to reshuffle a drawn season)
+- `/newseason` - Close the current season and open a new one (admin only, asks to confirm)
 
 ### In DM with Bot
 - `/listgroups` - List all active groups
-- `/selectgroup <number>` - Select a group for management
+- `/selectgroup <number>` - Select a group for management (or tap its button in `/listgroups`)
 - `/addrule` - Add exclusion rule
 - `/listrules` - Show exclusion rules
 - `/removerule` - Remove an exclusion rule
 - `/listjoined` - Show all participants
 - `/disband` - Deactivate the selected group
-- `/reset` - Clear assignments (caution!)
+- `/dryrunassignments` - Preview a draw without saving it
+- `/reset` - Clear this season's assignments (caution!)
 - `/adminhelp` - Show all commands
 
 ## Deployment to Railway
@@ -128,13 +125,10 @@ git push origin main
 3. Add PostgreSQL plugin
 4. Add environment variables:
    - `TELEGRAM_BOT_TOKEN` - your bot token
-   - `ADMIN_TELEGRAM_ID` - your Telegram ID
    - `USE_WEBHOOK` - set to `true`
-   - `EVENT_YEAR` - current year (e.g., 2024)
-5. Configure build settings:
-   - **Build Command:** `uv sync`
-   - **Start Command:** `alembic upgrade head && uv run python bot.py`
-6. Railway will automatically set `DATABASE_URL`, `PORT`, and provide a public URL
+   - `DATABASE_URL` - reference the Postgres service's `DATABASE_URL`
+5. Build and start commands come from [railway.toml](railway.toml)
+   (migrations run as the pre-deploy step).
 
 ### 3. Set Webhook URL
 
@@ -183,10 +177,15 @@ santa-eshkere-bot/
 - **Production:** PostgreSQL (Railway provides this automatically)
 
 Tables:
-- `groups` - Telegram groups where bot is activated
-- `users` - Participants in each group
-- `exclusions` - Rules for who can't be matched together
-- `assignments` - Secret Santa assignments by year
+- `groups` - Telegram groups where the bot is activated
+- `events` - seasons per group: `open` -> `drawn` -> `closed` (one current season per group)
+- `participants` - people in one season (every season starts empty; returning
+  players can reuse last season's name and wishlist in one tap)
+- `exclusions` - "never pair these two", per group, keyed by Telegram user id,
+  so they carry over between seasons
+- `assignments` - giver -> receiver within a season
+- `dm_states` - pending DM conversation step and selected admin group (in the
+  DB so a redeploy never loses someone mid-registration)
 
 ### Database Migrations
 
@@ -236,8 +235,11 @@ alembic history
 
 ### Can't send DM to users
 
-- Users must start a conversation with the bot first
-- Tell users to search for your bot and send `/start` before joining
+- Telegram only lets a bot DM people who opened a chat with it. On `/join`
+  the bot replies in the group with a button that opens the DM and resumes
+  registration.
+- After `/kickitoff` the group gets a list of anyone who could not be reached;
+  they can open the bot and use `/status` to see their assignment.
 
 ### Assignment generation fails
 

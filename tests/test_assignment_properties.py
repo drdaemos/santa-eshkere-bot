@@ -3,22 +3,16 @@
 import itertools
 import multiprocessing
 from collections import Counter
-from types import SimpleNamespace
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from src.services.assignment import AssignmentGenerator
-from tests.known_bugs import known_bug
+from src.services.assignment import ImpossibleDraw, NotEnoughParticipants, generate_assignments
 
 
-def people(n: int) -> list[SimpleNamespace]:
-    return [SimpleNamespace(id=i) for i in range(1, n + 1)]
-
-
-def rules(pairs) -> list[SimpleNamespace]:
-    return [SimpleNamespace(user1_id=min(a, b), user2_id=max(a, b)) for a, b in pairs]
+def people(n: int) -> list[int]:
+    return list(range(1, n + 1))
 
 
 def feasible(n: int, forbidden: set[frozenset[int]]) -> bool:
@@ -43,8 +37,8 @@ def test_result_is_valid_or_correctly_impossible(case):
     n, pairs = case
     forbidden = {frozenset(p) for p in pairs}
     try:
-        result = AssignmentGenerator.generate_assignments(people(n), rules(pairs))
-    except ValueError:
+        result = generate_assignments(people(n), pairs)
+    except ImpossibleDraw:
         assert not feasible(n, forbidden), "reported impossible but a valid draw exists"
         return
     givers = [g for g, _ in result]
@@ -57,24 +51,25 @@ def test_result_is_valid_or_correctly_impossible(case):
 
 
 def test_fewer_than_three_is_rejected():
-    with pytest.raises(ValueError):
-        AssignmentGenerator.generate_assignments(people(2), [])
+    with pytest.raises(NotEnoughParticipants):
+        generate_assignments(people(2), [])
 
 
 def test_every_derangement_is_reachable():
     # 4 people have 9 derangements; a fair-ish draw should hit all of them
-    seen = Counter(tuple(AssignmentGenerator.generate_assignments(people(4), [])) for _ in range(600))
+    seen = Counter(tuple(sorted(generate_assignments(people(4), []))) for _ in range(600))
     assert len(seen) == 9
 
 
 def _isolated_person_draw(n: int) -> None:
     # The last person is excluded from everyone: impossible, and the worst case
     # for naive backtracking, which retries every arrangement of the others.
-    group = people(n)
-    AssignmentGenerator.generate_assignments(group, rules((n, i) for i in range(1, n)))
+    try:
+        generate_assignments(people(n), [(n, i) for i in range(1, n)])
+    except ImpossibleDraw:
+        pass
 
 
-@known_bug("Backtracking explores ~(n-1)! arrangements before declaring an isolated person impossible; this blocks the event loop")
 def test_impossible_draw_fails_fast():
     proc = multiprocessing.get_context("spawn").Process(target=_isolated_person_draw, args=(12,))
     proc.start()

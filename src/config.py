@@ -1,45 +1,33 @@
-"""Configuration management from environment variables"""
+"""Configuration from environment variables"""
 
 import os
-from datetime import datetime
 
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
 
 class Config:
-    """Application configuration"""
-
-    # Telegram Bot Settings
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    ADMIN_TELEGRAM_ID: int = int(os.getenv("ADMIN_TELEGRAM_ID", "0"))
-
-    # Database Settings
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./db/santa_eshkere.db")
 
-    # Event Settings
-    EVENT_YEAR: int = int(os.getenv("EVENT_YEAR", str(datetime.now().year)))
-
-    # Webhook Settings (for Railway deployment)
-    WEBHOOK_URL: str = os.getenv("WEBHOOK_URL", "")
+    # Webhook mode (Railway)
+    USE_WEBHOOK: bool = os.getenv("USE_WEBHOOK", "false").lower() == "true"
+    WEBHOOK_URL: str = os.getenv("WEBHOOK_URL", "").rstrip("/")
     # Optional; when empty a secret is derived from the bot token (see main.webhook_secret)
     WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", "")
     PORT: int = int(os.getenv("PORT", "8000"))
 
-    # Runtime mode
-    USE_WEBHOOK: bool = os.getenv("USE_WEBHOOK", "false").lower() == "true"
-
     @classmethod
     def validate(cls) -> None:
-        """Validate required configuration"""
         if not cls.TELEGRAM_BOT_TOKEN:
             raise ValueError("TELEGRAM_BOT_TOKEN is required")
+        if cls.USE_WEBHOOK:
+            if not cls.WEBHOOK_URL.startswith("https://"):
+                raise ValueError("WEBHOOK_URL must be an https:// URL when USE_WEBHOOK=true")
+            if cls.DATABASE_URL.startswith("sqlite"):
+                # a container filesystem is wiped on deploy: refuse to lose data silently
+                raise ValueError("DATABASE_URL must point at Postgres in webhook (production) mode")
 
-        if cls.USE_WEBHOOK and not cls.WEBHOOK_URL:
-            raise ValueError("WEBHOOK_URL is required when USE_WEBHOOK=true")
 
-
-# Singleton instance
 config = Config()

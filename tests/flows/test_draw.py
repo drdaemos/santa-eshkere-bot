@@ -1,13 +1,7 @@
 """/kickitoff: generating and delivering assignments, and what happens next."""
 
-import pytest
-from sqlalchemy import select
-
-from src.config import config
-from src.database.models import Assignment
 from tests.harness import db
 from tests.harness.scenario import assert_no_errors, assignment_dms, assignment_of, register, select_group
-from tests.known_bugs import known_bug
 
 NAMES = ["Алиса", "Борис", "Вера", "Глеб", "Даша"]
 
@@ -90,7 +84,6 @@ async def test_only_admin_can_kick_off(world, office):
 # --- where real usage falls through -------------------------------------------------
 
 
-@known_bug("Receiver's wishlist goes into a Markdown message unescaped: their Santa never gets the assignment, /status fails too")
 async def test_assignment_delivered_whatever_the_wishlist(world, office):
     group, admin, people = await setup_group(
         world, office, NAMES[:3], wishlists={"Вера": "вот это: https://www.wildberries.ru/catalog/123/detail_aspx"}
@@ -100,7 +93,6 @@ async def test_assignment_delivered_whatever_the_wishlist(world, office):
     assert missing == []
 
 
-@known_bug("Assignment message = template + wishlist; a long wishlist overflows 4096 and the Santa gets nothing")
 async def test_assignment_delivered_with_long_wishlist(world, office):
     # 3900 chars fits in a user's message; registration echo is a separate bug, so seed directly
     group, admin, people = await setup_group(world, office, NAMES[:3])
@@ -109,7 +101,6 @@ async def test_assignment_delivered_with_long_wishlist(world, office):
     assert all(assignment_of(actor) for actor in people.values())
 
 
-@known_bug("A second /kickitoff (mis-tap, or 'did it work?') reshuffles everyone after gifts may be bought")
 async def test_second_kickoff_does_not_reshuffle(world, office):
     group, admin, people = await setup_group(world, office)
     await admin.send(group, "/kickitoff")
@@ -119,7 +110,6 @@ async def test_second_kickoff_does_not_reshuffle(world, office):
     assert {name: assignment_of(actor) for name, actor in people.items()} == first
 
 
-@known_bug("Failed deliveries (user blocked the bot) are only logged; the admin is never told who missed out")
 async def test_admin_is_told_about_failed_deliveries(world, office):
     group, admin, people = await setup_group(world, office)
     people["Глеб"].block_bot()
@@ -128,15 +118,14 @@ async def test_admin_is_told_about_failed_deliveries(world, office):
     assert any("Глеб" in text for text in to_admin_or_group), to_admin_or_group
 
 
-@known_bug("Joining after the draw registers the user with nobody giving to them and no notice to anyone")
 async def test_late_joiner_is_not_silently_left_out(world, office):
     group, admin, people = await setup_group(world, office, NAMES[:3])
     await admin.send(group, "/kickitoff")
     late = world.user("Late")
     group.add(late)
-    await register(late, group, "Опоздун", "что угодно")
+    await register(late, group, "Опоздун", "книги и настолки")
 
-    registered = await db.users_named("Опоздун")
+    registered = await db.participants_named("Опоздун")
     if registered:  # if the bot let them in, someone must now be gifting them
         receivers = {a.receiver_id for a in await db.assignments()}
         assert registered[0].id in receivers
@@ -145,40 +134,35 @@ async def test_late_joiner_is_not_silently_left_out(world, office):
 # --- next season -------------------------------------------------------------------
 
 
-@pytest.fixture
-def year(monkeypatch):
-    def set_year(value: int) -> None:
-        monkeypatch.setattr(config, "EVENT_YEAR", value)
+async def open_new_season(admin, group):
+    await admin.send(group, "/newseason")
+    confirm = group.feed[-1]
+    await admin.click(confirm, "Да")
+    assert "Новый сезон" in confirm.text
 
-    return set_year
 
-
-@known_bug("Participants are per group, not per season: returning players are told they're 'already registered'")
-async def test_returning_player_can_join_next_season(world, office, year):
-    year(2025)
+async def test_returning_player_can_join_next_season(world, office):
     group, admin, people = await setup_group(world, office, NAMES[:3])
     await admin.send(group, "/kickitoff")
+    await open_new_season(admin, group)
 
-    year(2026)
     alice = people["Алиса"]
     out = await alice.send(group, "/join")
     assert not any("уже зарегистрированы" in t for t in out.texts)
+    assert "имя" in alice.last_dm.text
 
 
-@known_bug("Last year's participants are drawn again this year even if they never re-joined")
-async def test_last_years_players_are_not_drawn_automatically(world, office, year):
-    year(2025)
+async def test_last_years_players_are_not_drawn_automatically(world, office):
     group, admin, veterans = await setup_group(world, office, NAMES[:3])
     await admin.send(group, "/kickitoff")
+    await open_new_season(admin, group)
 
-    year(2026)
-    newcomers = {}
     for i, name in enumerate(["Жора", "Зоя", "Игорь"]):
         actor = world.user(f"N{i}")
         group.add(actor)
         await register(actor, group, name, "книги")
-        newcomers[name] = actor
     await admin.send(group, "/kickitoff")
 
-    assert all(len(assignment_dms(a)) == 1 for a in veterans.values()), "veterans got a 2026 assignment"
-    assert len(await db.fetch_all(select(Assignment).where(Assignment.event_year == 2026))) == 3
+    assert all(len(assignment_dms(a)) == 1 for a in veterans.values()), "veterans got a second-season assignment"
+    current = (await db.events())[-1]
+    assert len(await db.assignments(current.id)) == 3

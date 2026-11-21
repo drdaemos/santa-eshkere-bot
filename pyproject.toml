@@ -32,6 +32,7 @@ markers = [
 [tool.ruff]
 target-version = "py312"
 line-length = 200
+extend-exclude = ["alembic/versions/65a064dc1941_initial_migration.py"]  # applied migration, left as generated
 
 [tool.ruff.lint]
 select = [

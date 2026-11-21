@@ -1,229 +1,163 @@
-"""Group command handlers for /start, /join, /kickitoff"""
+"""Group chat commands: /start, /join, /kickitoff, /newseason, chat migration"""
 
 import logging
-from datetime import datetime
 
-from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import Forbidden, TelegramError
 from telegram.ext import ContextTypes
 
-from ..config import config
-from ..database.models import Assignment, Exclusion, Group, User
-from ..database.session import get_session
+from ..database.models import EventStatus
+from ..database.session import session_scope
+from ..formatting import Safe, join, render
 from ..messages import Messages
-from ..services.assignment import AssignmentGenerator
-from ..services.notifications import NotificationService
+from ..services import seasons, state
+from ..services.assignment import ImpossibleDraw, NotEnoughParticipants
+from ..services.notifications import assignment_text, send_dm
 from ..utils.auth import is_group_admin, require_group_chat
+from ..validation import CONFIRM_CODES, callback
+from .registration import name_prompt
 
 logger = logging.getLogger(__name__)
 
 
+async def _reply(update: Update, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
+    assert update.effective_message is not None
+    await update.effective_message.reply_text(Safe(text), reply_markup=markup)
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Activate bot in a group (admin only) or greet user in DM"""
-    if not update.effective_chat or not update.effective_user:
+    """Activate the bot in this group; opens a season if there is none."""
+    chat = update.effective_chat
+    if chat is None or not await is_group_admin(update, context):
+        await _reply(update, Messages.ERROR_ADMIN_ONLY)
         return
-
-    # Handle DM /start
-    if update.effective_chat.type == "private":
-        await update.message.reply_text(
-            "Супер, бот на связи. Напиши теперь сообщение /join в группе"
-        )
-        return
-
-    # Group chat /start - check if user is group admin
-    if not await is_group_admin(update, context):
-        await update.message.reply_text(Messages.ERROR_ADMIN_ONLY)
-        return
-
-    chat_id = update.effective_chat.id
-    group_name = update.effective_chat.title or "Unnamed Group"
-
-    async for session in get_session():
-        # Check if group already exists
-        result = await session.execute(
-            select(Group).where(Group.telegram_chat_id == chat_id)
-        )
-        group = result.scalar_one_or_none()
-
-        if group:
-            # Reactivate if disbanded
-            if not group.is_active:
-                group.is_active = True
-                group.activated_at = datetime.now()
-                group.disbanded_at = None
-                await session.commit()
-                logger.info(f"Reactivated group {chat_id}")
-            else:
-                logger.info(f"Group {chat_id} already active")
-        else:
-            # Create new group
-            group = Group(
-                telegram_chat_id=chat_id,
-                group_name=group_name,
-                is_active=True
-            )
-            session.add(group)
-            await session.commit()
-            logger.info(f"Created new group {chat_id}")
-
-    await update.message.reply_text(Messages.WELCOME, parse_mode="Markdown")
+    async with session_scope() as s:
+        await seasons.activate_group(s, chat.id, chat.title or "")
+    logger.info("Group activated chat_id=%s", chat.id)
+    await _reply(update, Messages.WELCOME)
 
 
 @require_group_chat
 async def join_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """User joins Secret Santa (triggers DM flow)"""
-    if not update.effective_chat or not update.effective_user:
+    chat, user = update.effective_chat, update.effective_user
+    if chat is None or user is None or user.is_bot:
         return
-
-    chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
-    username = update.effective_user.username
-
-    async for session in get_session():
-        # Get group
-        result = await session.execute(
-            select(Group).where(Group.telegram_chat_id == chat_id)
-        )
-        group = result.scalar_one_or_none()
-
-        if not group:
-            await update.message.reply_text(Messages.ERROR_GROUP_NOT_FOUND)
+    async with session_scope() as s:
+        group = await seasons.group_by_chat(s, chat.id)
+        if group is None:
+            await _reply(update, Messages.ERROR_GROUP_NOT_FOUND)
             return
-
         if not group.is_active:
-            await update.message.reply_text(Messages.ERROR_GROUP_INACTIVE)
+            await _reply(update, Messages.ERROR_GROUP_INACTIVE)
             return
-
-        # Check if user already registered
-        result = await session.execute(
-            select(User).where(
-                User.telegram_id == user_id,
-                User.group_id == group.id
-            )
-        )
-        existing_user = result.scalar_one_or_none()
-
-        if existing_user:
-            await update.message.reply_text(Messages.ERROR_ALREADY_REGISTERED)
+        event = await seasons.current_event(s, group.id)
+        if event is None:
+            await _reply(update, Messages.NO_SEASON)
             return
+        if event.status == EventStatus.DRAWN:
+            await _reply(update, Messages.JOIN_AFTER_DRAW)
+            return
+        if await seasons.find_participant(s, event.id, user.id) is not None:
+            await _reply(update, Messages.ERROR_ALREADY_REGISTERED)
+            return
+        await state.set_flow(s, user.id, state.REG_NAME, event_id=event.id)
+        text, markup = await name_prompt(s, group, event, user.id)
+        event_id = event.id
 
-        # Store group context for DM flow
-        context.user_data["joining_group_id"] = group.id
-        context.user_data["joining_group_name"] = group.group_name
-        context.user_data["telegram_username"] = username
-        context.user_data["registration_step"] = "awaiting_name"
-
-    # Send DM to user
     try:
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=Messages.ASK_NAME.format(
-                group_name=context.user_data["joining_group_name"]
-            ),
-            parse_mode="Markdown"
-        )
-        # Optional: confirm in group
-        # await update.message.reply_text(Messages.JOIN_CHECK_DM)
-    except Exception as e:
-        logger.error(f"Failed to send DM to user {user_id}: {e}")
-        await update.message.reply_text(
-            "Не могу написать тебе в личку :( Напиши мне пожалуйста (@santa_eshkere_bot) и попробуй снова /join"
-        )
+        await context.bot.send_message(chat_id=user.id, text=text, reply_markup=markup)
+    except Forbidden:
+        # The user never opened a DM with the bot. A deep link opens it and
+        # resumes registration via /start join_<event_id>.
+        link = f"https://t.me/{context.bot.username}?start=join_{event_id}"
+        button = InlineKeyboardMarkup([[InlineKeyboardButton(Messages.JOIN_DM_BUTTON, url=link)]])
+        await _reply(update, Messages.JOIN_DM_FAILED, button)
+    except TelegramError:
+        logger.exception("Could not send registration DM to user_id=%s", user.id)
+        await _reply(update, Messages.ERROR_SYSTEM)
 
 
 @require_group_chat
 async def kickitoff_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Generate and send assignments (admin only)"""
-    if not update.effective_chat or not update.effective_user:
-        return
-
-    # Check if user is group admin
+    chat = update.effective_chat
+    assert chat is not None
     if not await is_group_admin(update, context):
-        await update.message.reply_text(Messages.ERROR_ADMIN_ONLY)
+        await _reply(update, Messages.ERROR_ADMIN_ONLY)
         return
 
-    chat_id = update.effective_chat.id
-
-    async for session in get_session():
-        # Get group
-        result = await session.execute(
-            select(Group).where(Group.telegram_chat_id == chat_id)
-        )
-        group = result.scalar_one_or_none()
-
-        if not group or not group.is_active:
-            await update.message.reply_text(Messages.ERROR_GROUP_NOT_FOUND)
+    async with session_scope() as s:
+        group = await seasons.group_by_chat(s, chat.id)
+        if group is None or not group.is_active:
+            await _reply(update, Messages.ERROR_GROUP_NOT_FOUND)
             return
-
-        # Get participants
-        result = await session.execute(
-            select(User).where(User.group_id == group.id)
-        )
-        participants = list(result.scalars().all())
-
-        if len(participants) < 3:
-            await update.message.reply_text(Messages.ERROR_NOT_ENOUGH_PARTICIPANTS)
+        event = await seasons.current_event(s, group.id)
+        if event is None:
+            await _reply(update, Messages.NO_SEASON)
             return
-
-        # Get exclusions
-        result = await session.execute(
-            select(Exclusion).where(Exclusion.group_id == group.id)
-        )
-        exclusions = list(result.scalars().all())
-
-        # Generate assignments
+        if event.status == EventStatus.DRAWN:
+            await _reply(update, Messages.DRAW_ALREADY_DONE)
+            return
         try:
-            assignment_pairs = AssignmentGenerator.generate_assignments(
-                participants, exclusions
-            )
-        except ValueError as e:
-            logger.error(f"Assignment generation failed: {e}")
-            await update.message.reply_text(Messages.ERROR_ASSIGNMENT_IMPOSSIBLE)
+            rows = await seasons.draw(s, event)
+        except NotEnoughParticipants:
+            await _reply(update, Messages.ERROR_NOT_ENOUGH_PARTICIPANTS)
             return
+        except ImpossibleDraw:
+            await _reply(update, Messages.ERROR_ASSIGNMENT_IMPOSSIBLE)
+            return
+        deliveries = [(a.id, a.giver.telegram_id, a.giver.real_name, assignment_text(a.receiver, group.title)) for a in rows]
+        event_id = event.id
 
-        # Save assignments to database
-        event_year = config.EVENT_YEAR
+    # The draw is committed before any DM goes out: a crash mid-way can't
+    # leave half the group with assignments that are not in the database.
+    delivered, failed_names = [], []
+    for assignment_id, telegram_id, name, text in deliveries:
+        if await send_dm(context.bot, telegram_id, text):
+            delivered.append(assignment_id)
+        else:
+            failed_names.append(name)
+    async with session_scope() as s:
+        await seasons.mark_delivered(s, delivered)
 
-        # Clear existing assignments for this year
-        await session.execute(
-            delete(Assignment).where(
-                Assignment.group_id == group.id,
-                Assignment.event_year == event_year
-            )
-        )
+    logger.info("Draw for event_id=%s: delivered %s/%s", event_id, len(delivered), len(deliveries))
+    await _reply(update, Messages.ASSIGNMENTS_SENT)
+    if failed_names:
+        await _reply(update, render(Messages.DELIVERY_FAILED, names=join(sorted(failed_names), sep=", ")))
 
-        # Create user lookup
-        user_lookup = {user.id: user for user in participants}
 
-        # Save new assignments
-        for giver_id, receiver_id in assignment_pairs:
-            assignment = Assignment(
-                group_id=group.id,
-                event_year=event_year,
-                giver_id=giver_id,
-                receiver_id=receiver_id
-            )
-            session.add(assignment)
+@require_group_chat
+async def newseason_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    assert chat is not None
+    if not await is_group_admin(update, context):
+        await _reply(update, Messages.ERROR_ADMIN_ONLY)
+        return
+    async with session_scope() as s:
+        group = await seasons.group_by_chat(s, chat.id)
+        if group is None or not group.is_active:
+            await _reply(update, Messages.ERROR_GROUP_NOT_FOUND)
+            return
+        group_id = group.id
+    markup = InlineKeyboardMarkup(
+        [[
+            InlineKeyboardButton(Messages.CONFIRM_YES_BUTTON, callback_data=callback("cf", CONFIRM_CODES["new_season"], group_id)),
+            InlineKeyboardButton(Messages.CONFIRM_NO_BUTTON, callback_data=callback("cx")),
+        ]]
+    )
+    await _reply(update, Messages.NEW_SEASON_CONFIRM, markup)
 
-        await session.commit()
 
-        # Send notifications
-        notification_service = NotificationService(context.bot)
-        assignments_dict = {
-            user_lookup[giver_id]: user_lookup[receiver_id]
-            for giver_id, receiver_id in assignment_pairs
-        }
-
-        results = await notification_service.send_bulk_assignments(
-            assignments_dict,
-            group_name=group.group_name or "Неизвестная группа"
-        )
-
-        # Report success
-        success_count = sum(1 for success in results.values() if success)
-        logger.info(
-            f"Sent {success_count}/{len(results)} assignments for group {group.id}"
-        )
-
-    await update.message.reply_text(Messages.ASSIGNMENTS_SENT, parse_mode="Markdown")
+async def chat_migrated(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Basic group -> supergroup: Telegram assigns a new chat id."""
+    message = update.effective_message
+    if message is None:
+        return
+    if message.migrate_to_chat_id:
+        old_id, new_id = message.chat.id, message.migrate_to_chat_id
+    elif message.migrate_from_chat_id:
+        old_id, new_id = message.migrate_from_chat_id, message.chat.id
+    else:
+        return
+    async with session_scope() as s:
+        if await seasons.migrate_chat(s, old_id, new_id):
+            logger.info("Group migrated chat_id=%s -> %s", old_id, new_id)

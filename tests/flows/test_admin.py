@@ -4,7 +4,6 @@ import pytest
 
 from tests.harness import db
 from tests.harness.scenario import assert_no_errors, register, select_group
-from tests.known_bugs import known_bug
 
 
 @pytest.fixture
@@ -91,7 +90,6 @@ async def test_listjoined(world, office_with_people):
     assert_no_errors(world)
 
 
-@known_bug("escape_markdown escapes for MarkdownV2 but messages are sent as legacy Markdown -> literal backslashes")
 async def test_listjoined_shows_names_verbatim(world, office):
     group, admin = office
     await admin.send(group, "/start")
@@ -136,7 +134,7 @@ async def test_addrule_paginates_large_groups(world, office):
     for i in range(11):
         actor = world.user(f"P{i}")
         group.add(actor)
-        await register(actor, group, f"Участник {i:02d}", "что угодно")
+        await register(actor, group, f"Участник {i:02d}", "книги и настолки")
     await select_group(admin, group)
 
     await admin.dm("/addrule")
@@ -168,7 +166,6 @@ async def test_dry_run_shows_pairs_without_saving(world, office_with_people):
     assert_no_errors(world)
 
 
-@known_bug("Stale /addrule keyboard after switching groups creates a rule between people from different groups")
 async def test_stale_addrule_keyboard_cannot_mix_groups(world):
     admin = world.user("Eugene")
     work, friends = world.group("Work", owner=admin), world.group("Friends", owner=admin)
@@ -192,7 +189,6 @@ async def test_stale_addrule_keyboard_cannot_mix_groups(world):
     assert "Алиса" not in admin.last_dm.text
 
 
-@known_bug("remove_rule_<id> callback has no ownership/admin check: anyone can delete any group's rules")
 async def test_rule_cannot_be_removed_by_outsider(world, office_with_people):
     group, admin, people = office_with_people
     await select_group(admin, group)
@@ -203,18 +199,18 @@ async def test_rule_cannot_be_removed_by_outsider(world, office_with_people):
 
     outsider = world.user("Mallory")
     await outsider.dm("/start")
-    await outsider.click_data(outsider.last_dm, f"remove_rule_{rule.id}")
+    await outsider.click_data(outsider.last_dm, f"rr:{rule.id}")
     assert len(await db.exclusions()) == 1
 
 
-@known_bug("Pending /reset confirmation does not re-check admin rights")
 async def test_demoted_admin_cannot_confirm_reset(world, office_with_people):
     group, admin, _ = office_with_people
     await admin.send(group, "/kickitoff")
     await select_group(admin, group)
     await admin.dm("/reset")
+    confirm = admin.last_dm
     group.demote(admin)
-    await admin.dm("да")
+    await admin.click(confirm, "Да")
     assert len(await db.assignments()) == 3
 
 
@@ -224,8 +220,9 @@ async def test_reset_clears_assignments(world, office_with_people):
     assert len(await db.assignments()) == 3
     await select_group(admin, group)
     await admin.dm("/reset")
-    await admin.dm("да")
-    assert "сброшены" in admin.last_dm.text
+    confirm = admin.last_dm
+    await admin.click(confirm, "Да")
+    assert "сброшены" in confirm.text
     assert await db.assignments() == []
     await people["Алиса"].dm("/status")
     assert "Ожидаем распределения" in people["Алиса"].last_dm.text
