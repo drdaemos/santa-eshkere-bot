@@ -24,7 +24,9 @@ from telegram.ext import Application, ContextTypes
 
 from src.main import build_application
 
-from .fake_bot_api import ApiCall, FakeBotAPI, FakeGroup, FakeUser, SentMessage
+from .fake_bot_api import BOT_ID, BOT_USERNAME, ApiCall, FakeBotAPI, FakeGroup, FakeUser, SentMessage
+
+BOT_USER = {"id": BOT_ID, "is_bot": True, "first_name": "Santa", "username": BOT_USERNAME}
 
 TEST_TOKEN = "123456789:TEST-fake-token-for-the-in-process-bot-api"
 
@@ -153,6 +155,12 @@ class Actor:
         }
         return await self.world.harness.feed({"callback_query": query})
 
+    async def tap_join(self, group: "Group") -> Outcome:
+        """Tap the join post's button: Telegram opens the DM and sends
+        /start join_<event_id> (which also lets the bot message this user)."""
+        url = join_url(join_post(group))
+        return await self.dm(f"/start {url.split('start=', 1)[1]}")
+
     def block_bot(self) -> None:
         self.user.blocked_bot = True
 
@@ -202,6 +210,17 @@ class Group:
     def demote(self, actor: Actor) -> None:
         self.chat.members[actor.id] = "member"
 
+    async def add_bot(self, by: Actor) -> Outcome:
+        """`by` adds the bot to this group: Telegram sends a new_chat_members service message."""
+        message = {
+            "message_id": self.world.harness.next_message_id(),
+            "date": int(time.time()),
+            "chat": self.chat.to_dict(),
+            "from": by.user.to_dict(),
+            "new_chat_members": [BOT_USER],
+        }
+        return await self.world.harness.feed({"message": message})
+
     @property
     def feed(self) -> list[SentMessage]:
         """Bot messages posted in this group, oldest first."""
@@ -241,10 +260,49 @@ async def register(actor: Actor, group: Group, name: str, wishlist: str) -> None
     await actor.dm(wishlist)
 
 
+DRAW_START_BUTTON = "Запустить"
+
+
+async def kick_off(admin: Actor, group: Group) -> Outcome:
+    """How an organizer runs the draw: /kickitoff, then confirm. Returns the
+    confirmation's outcome, or the command's when the bot refused up front."""
+    out = await admin.send(group, "/kickitoff")
+    prompt = group.feed[-1] if group.feed else None
+    if prompt is None or not any(DRAW_START_BUTTON in text for text, _ in prompt.buttons):
+        return out
+    return await admin.click(prompt, DRAW_START_BUTTON)
+
+
 async def select_group(admin: Actor, group: Group) -> None:
     """Admin picks `group` via /listgroups and its inline button."""
     await admin.dm("/listgroups")
     await admin.click(admin.last_dm, group.chat.title)
+
+
+def url_buttons(message: SentMessage) -> list[str]:
+    markup = message.reply_markup or {}
+    return [b["url"] for row in markup.get("inline_keyboard", []) for b in row if "url" in b]
+
+
+JOIN_BUTTON = "🎁 Участвовать"
+
+
+def join_post(group: Group) -> SentMessage:
+    """The group's current join post (the newest bot message with the join button)."""
+    posts = [m for m in group.feed if any(text == JOIN_BUTTON for text, _ in m.buttons)]
+    assert posts, f"no join post in {group.chat.title}: {[m.text[:40] for m in group.feed]}"
+    return posts[-1]
+
+
+def join_url(message: SentMessage) -> str:
+    return next(u for u in url_buttons(message) if "start=join_" in u)
+
+
+def listed(post: SentMessage) -> list[str]:
+    """Names in a join post's participant line."""
+    line = post.text.rsplit("\n", 1)[-1]
+    names = line.split(":", 1)[1].strip()
+    return [] if "пока никого" in names else [n.strip() for n in names.split(",")]
 
 
 ASSIGNMENT_MARKER = "Получает: "

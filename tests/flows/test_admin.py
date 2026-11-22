@@ -3,7 +3,7 @@
 import pytest
 
 from tests.harness import db
-from tests.harness.scenario import assert_no_errors, register, select_group
+from tests.harness.scenario import assert_no_errors, kick_off, register, select_group
 
 
 @pytest.fixture
@@ -63,14 +63,14 @@ async def test_non_admin_cannot_select_group_with_crafted_button(world, office_w
     await mallory.click_data(mallory.last_dm, data)
     assert "Только администратор" in mallory.last_dm.text
     out = await mallory.dm("/listjoined")
-    assert "выберите группу" in out.texts[-1]
+    assert "выбери группу" in out.texts[-1]
 
 
 async def test_group_commands_require_selection(world):
     admin = world.user("Eugene")
     for command in ["/addrule", "/listrules", "/removerule", "/listjoined", "/reset", "/disband", "/dryrunassignments"]:
         out = await admin.dm(command)
-        assert "выберите группу" in out.texts[-1], command
+        assert "выбери группу" in out.texts[-1], command
 
 
 async def test_admin_commands_are_dm_only(world, office):
@@ -156,12 +156,12 @@ async def test_addrule_needs_two_participants(world, office):
     assert "недостаточно участников" in out.texts[-1]
 
 
-async def test_dry_run_shows_pairs_without_saving(world, office_with_people):
-    group, admin, _ = office_with_people
+async def test_dry_run_checks_without_revealing_pairs(world, office_with_people):
+    group, admin, people = office_with_people
     await select_group(admin, group)
     await admin.dm("/dryrunassignments")
-    assert "Симуляция" in admin.last_dm.text
-    assert admin.last_dm.text.count("→") >= 3
+    assert "возможно" in admin.last_dm.text and "Участников: 3" in admin.last_dm.text
+    assert "→" not in admin.last_dm.text, "the admin usually plays too: no pairs"
     assert await db.assignments() == []
     assert_no_errors(world)
 
@@ -205,7 +205,7 @@ async def test_rule_cannot_be_removed_by_outsider(world, office_with_people):
 
 async def test_demoted_admin_cannot_confirm_reset(world, office_with_people):
     group, admin, _ = office_with_people
-    await admin.send(group, "/kickitoff")
+    await kick_off(admin, group)
     await select_group(admin, group)
     await admin.dm("/reset")
     confirm = admin.last_dm
@@ -216,7 +216,7 @@ async def test_demoted_admin_cannot_confirm_reset(world, office_with_people):
 
 async def test_reset_clears_assignments(world, office_with_people):
     group, admin, people = office_with_people
-    await admin.send(group, "/kickitoff")
+    await kick_off(admin, group)
     assert len(await db.assignments()) == 3
     await select_group(admin, group)
     await admin.dm("/reset")
@@ -225,4 +225,4 @@ async def test_reset_clears_assignments(world, office_with_people):
     assert "сброшены" in confirm.text
     assert await db.assignments() == []
     await people["Алиса"].dm("/status")
-    assert "Ожидаем распределения" in people["Алиса"].last_dm.text
+    assert "Ждём, когда админ запустит распределение" in people["Алиса"].last_dm.text

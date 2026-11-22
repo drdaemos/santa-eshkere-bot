@@ -1,5 +1,6 @@
-"""Chat-type guards and admin checks"""
+"""Chat-type guards, admin and membership checks"""
 
+import logging
 from collections.abc import Awaitable, Callable
 from functools import wraps
 
@@ -10,6 +11,8 @@ from telegram.ext import ContextTypes
 
 from ..formatting import Safe
 from ..messages import Messages
+
+logger = logging.getLogger(__name__)
 
 Handler = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]
 
@@ -63,3 +66,19 @@ async def is_group_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not update.effective_user:
         return False
     return await is_chat_admin(chat.id, update.effective_user.id, context.bot)
+
+
+_MEMBER_STATUSES = {ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.MEMBER}
+
+
+async def is_group_member(bot: Bot, chat_id: int, user_id: int) -> bool:
+    """Is user_id in the group now. Fails open on API errors: a hiccup must
+    never lock a real member out of the game."""
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except TelegramError as e:
+        logger.warning("Membership check in chat_id=%s failed: %s", chat_id, e.__class__.__name__)
+        return True
+    if member.status in _MEMBER_STATUSES:
+        return True
+    return member.status == ChatMemberStatus.RESTRICTED and bool(getattr(member, "is_member", False))

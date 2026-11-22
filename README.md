@@ -7,6 +7,8 @@ A Telegram bot for organizing company Secret Santa with exclusion rules (e.g., s
 - Multi-group support - bot can be activated in multiple Telegram groups
 - Private registration via DM to keep wishlists secret
 - Exclusion rules to prevent certain pairs from being matched
+- Optional joining deadline
+- Anonymous messages between each Santa and their receiver
 - Secret Santa assignment algorithm with validation
 - Admin commands for managing groups, rules, and participants
 - All messages in Russian
@@ -58,36 +60,67 @@ The bot will start in polling mode using SQLite database for local development.
 ### For Group Admins
 
 1. **Activate the bot in your group:**
-   - Add the bot to your Telegram group
-   - Send `/start` in the group (admin only)
+   - Add the bot to your Telegram group. When an admin adds it, the season
+     opens right away and the bot posts the **join post**: a "🎁 Участвовать"
+     button and the live list of who is in. Pin it if you like. (Added by a
+     non-admin, it only says hello and asks an admin to send `/start`.)
+   - `/start` in the group (admin only) does the same by hand; sent again, it
+     re-posts the join post at the bottom of the chat.
 
 2. **Manage from DM:**
-   - Send `/listgroups` to see all active groups
-   - Send `/selectgroup 1` to select a group
+   - With a single group there is nothing to select: commands act on it.
+   - With several, `/listgroups` and tap one (or `/selectgroup 1`).
+   - `/listjoined` shows who is in, who started registering but didn't finish,
+     and (after the draw) whom the bot couldn't reach.
    - Send `/adminhelp` for all admin commands
 
 3. **Set exclusion rules (optional):**
    - Send `/addrule` in DM
    - Follow the prompts to add pairs who shouldn't be matched
 
-4. **Start Secret Santa:**
-   - Once users have joined, send `/kickitoff` in the group
-   - Bot will generate assignments and DM each participant
+4. **Joining deadline (optional):**
+   - `/deadline 30.11 18:00` in the group (a date alone means 23:59 that
+     day; `/deadline off` removes it, `/deadline` shows it). Times are in
+     `TIMEZONE` (default Europe/Moscow). The join post shows it.
+   - From then on nobody new can start registering; people midway may finish.
+     The join post loses its button, and the admin who set the deadline gets a
+     DM with the count and who hasn't finished (in the group if they never
+     opened the bot). Setting a later date reopens joining.
+
+5. **Start Secret Santa:**
+   - Once users have joined, send `/kickitoff` in the group. The bot asks
+     first ("Запустить для 7 участников?") and names anyone still midway
+     through registering; nothing is drawn until an admin taps "🎅 Запустить".
+   - The prompt turns into "Сани поехали" and everyone gets a DM.
 
 ### For Participants
 
-1. **Join:**
-   - Send `/join` in the group chat
-   - Bot will DM you to collect your name and wishlist
+Participants never need a command:
 
-2. **Update wishlist:**
-   - Send `/wishlist` in DM with the bot
+1. **Join:** tap "🎁 Участвовать" on the join post. It opens the DM with the
+   bot (Telegram shows a Start button the first time). Pick the name with one
+   tap (Telegram name, or last season's) or type one, then send a wishlist.
+   `/join` in the group still works.
+2. **Change the wishlist:** just send the new text to the bot and confirm, or
+   use the "✏️ Изменить вишлист" button (or `/wishlist`).
+3. **Check status:** `/status`, or tap the join button again.
+4. **Leave:** the "🚪 Выйти из игры" button (or `/leave`).
+5. **Ask or answer anonymously:** after the draw, the assignment DM and
+   `/status` have "✉️ Написать получателю" and "✉️ Написать своему Санте".
+   One tap, one text message, relayed by the bot; the other side gets it with
+   a "↩️ Ответить" button. The receiver only ever sees "Тайный Санта"; the
+   Santa sees the receiver's name (they know it anyway). Buttons of a pairing
+   that changed (someone left, the draw was reset, a new season) stop working,
+   and the bot logs neither the text nor who wrote to whom.
 
-3. **Check status:**
-   - Send `/status` in DM to see your registration and assignment
-
-4. **Leave:**
-   - Send `/leave` in DM
+Design rules behind this:
+- **Quiet group:** joining, leaving and changes after the draw only edit the
+  join post. The bot posts in the group just for `/kickitoff` and when it
+  can't reach someone by DM.
+- **Hard to get wrong:** answered prompts lose their buttons, old buttons are
+  harmless, text sent outside a step is offered as a wishlist (small talk
+  isn't), and a forwarded join link only works for members of the group.
+- Typing `/` shows a short command menu per chat type (DM, group, group admins).
 
 ### Changes after the draw
 
@@ -110,19 +143,20 @@ Telegram on every command and button press.
 
 ### In Group Chat
 - `/start` - Activate bot (admin only); opens a season if none is running
-- `/kickitoff` - Draw and send assignments (admin only; refuses to reshuffle a drawn season)
+- `/kickitoff` - Draw and send assignments after a confirmation (admin only; refuses to reshuffle a drawn season)
+- `/deadline 30.11 18:00` - Joining deadline (admin only; `/deadline off` removes it)
 - `/newseason` - Close the current season and open a new one (admin only, asks to confirm)
 
 ### In DM with Bot
 - `/listgroups` - List all active groups
-- `/selectgroup <number>` - Select a group for management (or tap its button in `/listgroups`)
+- `/selectgroup <number>` - Select a group for management (or tap its button in `/listgroups`; not needed with one group)
 - `/addrule` - Add exclusion rule
 - `/listrules` - Show exclusion rules
 - `/removerule` - Remove an exclusion rule
-- `/listjoined` - Show all participants
+- `/listjoined` - Participants, unfinished registrations, undelivered assignments
 - `/removeparticipant` - Remove someone from the season (repairs the draw)
 - `/disband` - Deactivate the selected group
-- `/dryrunassignments` - Preview a draw without saving it
+- `/dryrunassignments` - Check a draw is possible with the current rules (pairs are never shown)
 - `/reset` - Clear this season's assignments (caution!)
 - `/adminhelp` - Show all commands
 
@@ -145,6 +179,7 @@ git push origin main
    - `TELEGRAM_BOT_TOKEN` - your bot token
    - `USE_WEBHOOK` - set to `true`
    - `DATABASE_URL` - reference the Postgres service's `DATABASE_URL`
+   - `TIMEZONE` (optional) - IANA zone deadlines are typed and shown in, default `Europe/Moscow`
 5. Build, start and healthcheck settings come from [railway.toml](railway.toml):
    migrations run as the pre-deploy step, and Railway only switches traffic to
    a new deploy once `GET /health` answers 200 (bot started, webhook set,
@@ -292,7 +327,7 @@ Two layers share that DSL:
 
 | Layer | Where | What it proves |
 |---|---|---|
-| in-process (`tests/flows`, most tests) | real `Application`, fake HTTP transport | every flow and edge case, fast (~20 s for ~270 tests) |
+| in-process (`tests/flows`, most tests) | real `Application`, fake HTTP transport | every flow and edge case, fast (~25 s for ~290 tests) |
 | process e2e (`tests/e2e`, marker `e2e`) | `bot.py` as its own OS process, talking HTTP to `tests/harness/server.py` | deploy-shaped startup (pre-deploy command from `railway.toml`, env-only config), polling and webhook modes, webhook secret enforcement, the `/health` endpoint Railway checks, surviving a killed process |
 
 ```bash

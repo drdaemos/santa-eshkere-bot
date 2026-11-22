@@ -4,14 +4,16 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass
 
-from telegram import Bot
+from sqlalchemy.ext.asyncio import AsyncSession
+from telegram import Bot, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
 from ..database.models import Group, Participant
 from ..database.session import session_scope
 from ..formatting import Safe, join, render, truncate
 from ..messages import Messages
-from .seasons import Reassignment, mark_delivered
+from .chat import chat_rows
+from .seasons import Reassignment, mark_delivered, santa_assignment_ids
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ def assignment_text(receiver: Participant, group_name: str) -> Safe:
         group_name=truncate(group_name, _GROUP_CAP),
         receiver_name=truncate(receiver.real_name, _NAME_CAP),
         receiver_wishlist=wishlist_text(receiver),
+        chat_hint=Safe(Messages.CHAT_HINT),
     )
 
 
@@ -41,7 +44,13 @@ def reassignment_text(receiver: Participant, group_name: str) -> Safe:
         group_name=truncate(group_name, _GROUP_CAP),
         receiver_name=truncate(receiver.real_name, _NAME_CAP),
         receiver_wishlist=wishlist_text(receiver),
+        chat_hint=Safe(Messages.CHAT_HINT),
     )
+
+
+def assignment_markup(assignment_id: int, santa_assignment_id: int | None) -> InlineKeyboardMarkup:
+    """Under an assignment DM: write to the receiver, and to one's own Santa."""
+    return InlineKeyboardMarkup(chat_rows(assignment_id, santa_assignment_id))
 
 
 @dataclass
@@ -53,11 +62,15 @@ class Notice:
     text: Safe
     assignment_id: int | None = None  # marked delivered once sent
     report_chat_id: int | None = None  # group to tell if the DM can't be sent
+    markup: InlineKeyboardMarkup | None = None
 
 
-def reassignment_notices(reassigned: list[Reassignment], group: Group, newcomer_id: int | None = None) -> list[Notice]:
+async def reassignment_notices(
+    s: AsyncSession, reassigned: list[Reassignment], group: Group, newcomer_id: int | None = None
+) -> list[Notice]:
     """DMs for givers whose assignment is new; a late joiner gets the regular
     assignment message, everyone else is told their old one is void."""
+    santas = await santa_assignment_ids(s, [r.giver.id for r in reassigned])
     return [
         Notice(
             telegram_id=r.giver.telegram_id,
@@ -65,6 +78,7 @@ def reassignment_notices(reassigned: list[Reassignment], group: Group, newcomer_
             text=(assignment_text if r.giver.id == newcomer_id else reassignment_text)(r.receiver, group.title),
             assignment_id=r.assignment_id,
             report_chat_id=group.telegram_chat_id,
+            markup=assignment_markup(r.assignment_id, santas.get(r.giver.id)),
         )
         for r in reassigned
     ]
@@ -75,7 +89,7 @@ async def deliver(bot: Bot, notices: list[Notice]) -> list[Notice]:
     group (only names, never who gives to whom). Returns the failed ones."""
     delivered, failed = [], []
     for notice in notices:
-        if await send_dm(bot, notice.telegram_id, notice.text):
+        if await send_dm(bot, notice.telegram_id, notice.text, notice.markup):
             if notice.assignment_id is not None:
                 delivered.append(notice.assignment_id)
         else:
@@ -102,9 +116,9 @@ async def post(bot: Bot, chat_id: int, text: Safe) -> bool:
         return False
 
 
-async def send_dm(bot: Bot, telegram_id: int, text: Safe) -> bool:
+async def send_dm(bot: Bot, telegram_id: int, text: Safe, markup: InlineKeyboardMarkup | None = None) -> bool:
     try:
-        await bot.send_message(chat_id=telegram_id, text=text)
+        await bot.send_message(chat_id=telegram_id, text=text, reply_markup=markup)
         return True
     except TelegramError as e:
         # no names or texts in logs

@@ -38,7 +38,7 @@ async def test_join_without_opening_dm_tells_user_what_to_do(world, started):
     alice = world.user("Alice")
     group.add(alice)
     out = await alice.send(group, "/join")
-    assert "Не могу написать" in out.texts[-1]
+    assert "не могу написать тебе в личку" in out.texts[-1]
 
     # Following the instruction then works
     await alice.dm("/start")
@@ -52,7 +52,9 @@ async def test_join_twice_is_refused(world, started):
     group.add(alice)
     await register(alice, group, "Алиса", "книги")
     out = await alice.send(group, "/join")
-    assert "уже зарегистрированы" in out.texts[-1]
+    assert out.sent_to(group.id) == [], "answered in DM, not in the group"
+    assert "Ты уже участвуешь" in alice.last_dm.text
+    assert len(await db.participants_named("Алиса")) == 1
 
 
 async def test_wishlist_update(world, started):

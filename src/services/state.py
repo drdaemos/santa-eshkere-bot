@@ -1,15 +1,21 @@
 """Per-user DM conversation state, stored in the database.
 
 Flows:
-  reg_name       {"event_id"}                    waiting for the participant's name
-  reg_wishlist   {"event_id", "name"}            waiting for the wishlist
+  reg_name       {"event_id", "tg_name"}         waiting for the participant's name
+  reg_wishlist   {"event_id", "tg_name", "name"} waiting for the wishlist
+
+tg_name is the Telegram name, so organizers can see who started registering
+but never finished.
   edit_wishlist  {"participant_ids": [...]}      /wishlist was sent
+  confirm_wishlist {"text"}                      free text sent: use it as the wishlist?
+  chat_compose   {"assignment_id"}               the next text goes to the Santa / receiver
 """
 
 import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database.models import DmState
@@ -17,6 +23,8 @@ from ..database.models import DmState
 REG_NAME = "reg_name"
 REG_WISHLIST = "reg_wishlist"
 EDIT_WISHLIST = "edit_wishlist"
+CONFIRM_WISHLIST = "confirm_wishlist"
+CHAT_COMPOSE = "chat_compose"
 
 
 @dataclass
@@ -63,3 +71,14 @@ async def selected_group_id(s: AsyncSession, telegram_id: int) -> int | None:
 async def select_group(s: AsyncSession, telegram_id: int, group_id: int) -> None:
     row = await _row(s, telegram_id)
     row.selected_group_id = group_id
+
+
+async def unfinished_registrations(s: AsyncSession, event_id: int) -> dict[int, str]:
+    """telegram_id -> best known name of everyone midway through registering for event_id."""
+    rows = await s.execute(select(DmState).where(DmState.flow.in_([REG_NAME, REG_WISHLIST])))
+    pending = {}
+    for row in rows.scalars():
+        data = json.loads(row.flow_data or "{}")
+        if data.get("event_id") == event_id:
+            pending[row.telegram_id] = str(data.get("name") or data.get("tg_name") or "без имени")
+    return pending

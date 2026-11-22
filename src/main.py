@@ -5,7 +5,14 @@ import hashlib
 import logging
 import sys
 
-from telegram import Update
+from telegram import (
+    Bot,
+    BotCommand,
+    BotCommandScopeAllChatAdministrators,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    Update,
+)
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import (
@@ -23,6 +30,7 @@ from .config import config
 from .database.session import close_db, init_db
 from .handlers import admin, group, user
 from .messages import Messages
+from .services import deadlines
 from .web import WEBHOOK_PATH, serve_webhook
 
 logger = logging.getLogger(__name__)
@@ -62,10 +70,54 @@ async def post_init(application: Application) -> None:
     await init_db()
     logger.info("Database initialized")
     logger.info(f"Bot username: @{(await application.bot.get_me()).username}")
+    await set_command_menus(application.bot)
+    # passed joining deadlines: close the join post, tell the admin
+    application.bot_data["deadline_checks"] = asyncio.create_task(
+        deadlines.run_checks(application.bot, config.DEADLINE_CHECK_SECONDS)
+    )
+
+
+# What Telegram shows when someone types "/" (per chat type). Participants
+# only see what they need; admin DM commands stay in /adminhelp.
+COMMAND_MENUS: dict[str, list[tuple[str, str]]] = {
+    "private": [
+        ("status", "Мой статус и задание"),
+        ("wishlist", "Изменить вишлист"),
+        ("leave", "Выйти из игры"),
+        ("cancel", "Отменить текущее действие"),
+        ("adminhelp", "Команды для админов групп"),
+    ],
+    "groups": [
+        ("join", "Участвовать в Тайном Санте"),
+    ],
+    "group_admins": [
+        ("join", "Участвовать в Тайном Санте"),
+        ("start", "Включить бота и показать кнопку участия"),
+        ("kickitoff", "Запустить распределение"),
+        ("deadline", "Дедлайн регистрации: /deadline 30.11 18:00"),
+        ("newseason", "Закрыть сезон и открыть новый"),
+    ],
+}
+
+
+async def set_command_menus(bot: Bot) -> None:
+    scopes = {
+        "private": BotCommandScopeAllPrivateChats(),
+        "groups": BotCommandScopeAllGroupChats(),
+        "group_admins": BotCommandScopeAllChatAdministrators(),
+    }
+    for name, commands in COMMAND_MENUS.items():
+        try:
+            await bot.set_my_commands([BotCommand(c, d) for c, d in commands], scope=scopes[name])
+        except TelegramError as e:  # cosmetic: never block startup on it
+            logger.warning("Setting the %s command menu failed: %s", name, e.__class__.__name__)
 
 
 async def post_shutdown(application: Application) -> None:
     """Cleanup on shutdown"""
+    checks = application.bot_data.pop("deadline_checks", None)
+    if checks is not None:
+        checks.cancel()
     logger.info("Closing database connections...")
     await close_db()
     logger.info("Shutdown complete")
@@ -104,7 +156,9 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("join", group.join_command))
     application.add_handler(CommandHandler("kickitoff", group.kickitoff_command))
     application.add_handler(CommandHandler("newseason", group.newseason_command))
+    application.add_handler(CommandHandler("deadline", group.deadline_command))
     application.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, group.chat_migrated))
+    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, group.bot_added))
 
     # Participant DM
     application.add_handler(CommandHandler("start", user.start_dm, filters=private))

@@ -11,13 +11,14 @@ Kept to a few long journeys because each test starts a process (~1-2 s).
 
 import os
 import tomllib
+from datetime import datetime, timedelta
 
 import httpx
 import pytest
 
 from src.main import webhook_secret
 from tests.harness.process import ROOT, ProcessHarness
-from tests.harness.scenario import TEST_TOKEN, World, assignment_of, register
+from tests.harness.scenario import TEST_TOKEN, World, assignment_of, join_post, kick_off, listed, register
 
 pytestmark = pytest.mark.e2e
 
@@ -59,6 +60,7 @@ async def test_deploy_runs_migrations_and_bot_starts(make_world):
     assert "Running upgrade" in world.harness.pre_deploy_output
     assert any("Application started" in line for line in world.harness.bot.lines)
     assert not any("api.telegram.org" in line or TEST_TOKEN in line for line in world.harness.bot.lines), "token leaked to logs"
+    assert set(world.api.command_menus) == {"all_private_chats", "all_group_chats", "all_chat_administrators"}
 
 
 async def test_full_season_over_http(make_world):
@@ -66,7 +68,10 @@ async def test_full_season_over_http(make_world):
     admin = world.user("Eugene", username="eugene")
     office = world.group("Office", owner=admin)
     await admin.send(office, "/start")
-    assert "/join" in office.feed[-1].text
+    assert "Участвуют (0)" in join_post(office).text
+    deadline = datetime.now() + timedelta(days=20)  # any future date (the process uses the real clock)
+    await admin.send(office, f"/deadline {deadline:%d.%m.%Y} 18:00")
+    assert f"Регистрация открыта до {deadline:%d.%m} в 18:00" in join_post(office).text
 
     # two people open the DM first, one joins cold and uses the deep link
     names = {"Алиса": "Alice", "Борис": "Boris", "Вера": "Vera", "Глеб": "Gleb"}
@@ -96,7 +101,7 @@ async def test_full_season_over_http(make_world):
     assert "(4)" in admin.last_dm.text
 
     # draw
-    await admin.send(office, "/kickitoff")
+    await kick_off(admin, office)
     received = {name: assignment_of(actor) for name, actor in people.items()}
     assert sorted(received.values()) == sorted(people)
     assert all(giver != receiver for giver, receiver in received.items())
@@ -104,11 +109,21 @@ async def test_full_season_over_http(make_world):
     santa_of_vera = next(people[g] for g, r in received.items() if r == "Вера")
     assert "хочу: Вера & <книги> https://ozon.ru/a_b_c" in santa_of_vera.last_dm.text, "wishlist arrives verbatim"
 
+    # an anonymous question and its answer
+    vera = people["Вера"]
+    await santa_of_vera.click(santa_of_vera.last_dm, "Написать получателю")
+    await santa_of_vera.dm("Какой размер & цвет?")
+    question = vera.last_dm
+    assert "Тайный Санта" in question.text and "Какой размер & цвет?" in question.text
+    await vera.click(question, "Ответить")
+    await vera.dm("M, зелёный")
+    assert "M, зелёный" in santa_of_vera.last_dm.text and "Пишет Вера" in santa_of_vera.last_dm.text
+
     # live wishlist update reaches the Santa; a second draw is refused
     await people["Вера"].dm("/wishlist")
     await people["Вера"].dm("передумала: варежки")
     assert "варежки" in santa_of_vera.last_dm.text
-    await admin.send(office, "/kickitoff")
+    await kick_off(admin, office)
     assert "уже сделано" in office.feed[-1].text
 
     # a latecomer is spliced into the chain; then someone drops out
@@ -125,6 +140,7 @@ async def test_full_season_over_http(make_world):
     assert sorted(received.values()) == sorted(people), "still a complete draw without Глеб"
     assert all(giver != receiver for giver, receiver in received.items())
     assert received["Алиса"] != "Борис" and received["Борис"] != "Алиса"
+    assert sorted(listed(join_post(office))) == sorted(people), "the join post tracks who is in"
 
     # next season: a returning player rejoins in two taps
     await admin.send(office, "/newseason")

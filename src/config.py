@@ -2,6 +2,7 @@
 
 import os
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
@@ -21,6 +22,11 @@ class Config:
     WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", "")
     PORT: int = int(os.getenv("PORT", "8000"))
 
+    # Time zone people type and read deadlines in (IANA name)
+    TIMEZONE: str = os.getenv("TIMEZONE", "Europe/Moscow")
+    # How often the bot checks for passed joining deadlines
+    DEADLINE_CHECK_SECONDS: int = int(os.getenv("DEADLINE_CHECK_SECONDS", "60"))
+
     # Railway sets this in every deployment
     ON_RAILWAY: bool = bool(os.getenv("RAILWAY_ENVIRONMENT"))
 
@@ -36,6 +42,10 @@ class Config:
         if cls.ON_RAILWAY and cls.DATABASE_URL.startswith("sqlite"):
             # a container filesystem is wiped on deploy: refuse to lose data silently
             raise ValueError("DATABASE_URL must point at Postgres on Railway")
+        try:
+            ZoneInfo(cls.TIMEZONE)
+        except (ZoneInfoNotFoundError, ValueError) as e:
+            raise ValueError(f"TIMEZONE must be an IANA time zone name like Europe/Moscow, got {cls.TIMEZONE!r}") from e
         if cls.ON_RAILWAY and cls.TELEGRAM_API_BASE_URL:
             raise ValueError("TELEGRAM_API_BASE_URL is for tests only")
 

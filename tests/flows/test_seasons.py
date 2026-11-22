@@ -2,7 +2,7 @@
 
 from tests.harness import db
 from tests.harness.fake_bot_api import BOT_USERNAME
-from tests.harness.scenario import assert_no_errors, assignment_of, register, select_group
+from tests.harness.scenario import assert_no_errors, assignment_of, kick_off, register, select_group
 
 
 async def open_new_season(admin, group):
@@ -70,7 +70,7 @@ async def test_new_season_requires_admin_and_confirmation(world, office):
 
 async def test_returning_player_reuses_name_and_wishlist_in_two_taps(world, office):
     group, admin, people = await seeded(world, office)
-    await admin.send(group, "/kickitoff")
+    await kick_off(admin, group)
     await open_new_season(admin, group)
 
     alice = people["Алиса"]
@@ -112,14 +112,14 @@ async def test_rules_carry_over_between_seasons(world, office):
     for _ in range(4):
         await select_group(admin, group)
         await admin.dm("/dryrunassignments")
-        assert "Алиса → Борис" not in admin.last_dm.text and "Борис → Алиса" not in admin.last_dm.text
+        assert "возможно" in admin.last_dm.text
     await admin.dm("/listrules")
     assert "Алиса ↔ Борис" in admin.last_dm.text and "не участвует" not in admin.last_dm.text
 
 
 async def test_santa_is_told_when_their_receiver_changes_wishlist(world, office):
     group, admin, people = await seeded(world, office)
-    await admin.send(group, "/kickitoff")
+    await kick_off(admin, group)
     alice = people["Алиса"]
     santa = next(actor for actor in people.values() if assignment_of(actor) == "Алиса")
 
@@ -134,8 +134,8 @@ async def test_santa_is_told_when_their_receiver_changes_wishlist(world, office)
 
 async def test_kickoff_twice_explains_instead_of_reshuffling(world, office):
     group, admin, _ = await seeded(world, office)
-    await admin.send(group, "/kickitoff")
-    out = await admin.send(group, "/kickitoff")
+    await kick_off(admin, group)
+    out = await kick_off(admin, group)
     assert "уже сделано" in out.texts[-1]
 
 

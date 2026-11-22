@@ -18,9 +18,12 @@ from ..formatting import Safe, join, render, truncate
 from ..messages import Messages
 from ..services import seasons, state
 from ..services.assignment import ImpossibleDraw, NotEnoughParticipants
-from ..services.notifications import deliver, post, reassignment_notices, send_dm
+from ..services.join_post import post_join_message, refresh_join_message
+from ..services.notifications import deliver, reassignment_notices, send_dm
 from ..utils.auth import is_chat_admin, require_private_chat
 from ..validation import CONFIRM_ACTIONS, CONFIRM_CODES, ValidationError, callback, parse_callback, parse_index
+from . import chat as chat_handlers
+from . import group as group_handlers
 from . import registration, user
 
 logger = logging.getLogger(__name__)
@@ -47,13 +50,19 @@ async def _admin_groups(s: AsyncSession, context: ContextTypes.DEFAULT_TYPE, use
 
 
 async def _selected_group(s: AsyncSession, update: Update, context: ContextTypes.DEFAULT_TYPE) -> Group | None:
-    """The admin's selected group, re-verifying admin rights; replies on failure."""
+    """The admin's selected group (or their only group), re-verifying admin
+    rights; replies on failure."""
     user = update.effective_user
     assert user is not None
     group_id = await state.selected_group_id(s, user.id)
     if group_id is None:
-        await _reply(update, Messages.ERROR_NO_GROUP_SELECTED)
-        return None
+        # nothing to choose between: most admins run a single group
+        groups = await _admin_groups(s, context, user.id)
+        if len(groups) != 1:
+            await _reply(update, Messages.ERROR_NO_GROUP_SELECTED)
+            return None
+        await state.select_group(s, user.id, groups[0].id)
+        return groups[0]
     group = await seasons.get_group(s, group_id)
     if group is None:
         await _reply(update, Messages.ERROR_GROUP_NOT_FOUND)
@@ -155,7 +164,9 @@ async def listjoined_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         group, event = selected
         people = sorted(await seasons.participants(s, event.id), key=lambda p: p.joined_at)
-    if not people:
+        unfinished = await seasons.unfinished_names(s, event.id)
+        undelivered = sorted(a.giver.real_name for a in await seasons.assignments(s, event.id) if a.delivered_at is None)
+    if not people and not unfinished:
         await _reply(update, Messages.NO_PARTICIPANTS)
         return
     lines = [
@@ -164,7 +175,12 @@ async def listjoined_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         else render(Messages.USER_ENTRY_NO_USERNAME, name=p.real_name)
         for p in people
     ]
-    await _reply(update, render(Messages.LIST_JOINED, group_name=group.title, count=len(people), users_list=join(lines)))
+    extra = {
+        "unfinished": render(Messages.LIST_JOINED_UNFINISHED, names=join(unfinished, sep=", ")) if unfinished else "",
+        "undelivered": render(Messages.LIST_JOINED_UNDELIVERED, names=join(undelivered, sep=", ")) if undelivered else "",
+    }
+    text = render(Messages.LIST_JOINED, group_name=group.title, count=len(people), users_list=join(lines), **extra)
+    await _reply(update, text)
 
 
 @require_private_chat
@@ -257,11 +273,8 @@ async def dryrun_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except ImpossibleDraw:
             await _reply(update, Messages.ERROR_ASSIGNMENT_IMPOSSIBLE)
             return
-    lines = [render(Messages.DRY_RUN_PAIR, giver=g.real_name, receiver=r.real_name) for g, r in sorted(pairs, key=lambda p: p[0].real_name)]
-    await _reply(
-        update,
-        render(Messages.DRY_RUN, group_name=group.title, participants=len(pairs), rules=rule_count, pairs=join(lines)),
-    )
+    # Pairs are never shown: the admin usually takes part too.
+    await _reply(update, render(Messages.DRY_RUN, group_name=group.title, participants=len(pairs), rules=rule_count))
 
 
 @require_private_chat
@@ -418,18 +431,31 @@ async def on_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, action_
         if not await is_chat_admin(group.telegram_chat_id, user.id, context.bot):
             await query.answer(Messages.ERROR_ADMIN_ONLY, show_alert=True)
             return
-        if action == "reset":
-            event = await seasons.current_event(s, group.id)
-            text = Messages.RESET_COMPLETE if event and await seasons.reset_draw(s, event) else Messages.RESET_NOTHING
-        elif action == "disband":
-            await seasons.disband_group(s, group)
-            text = Messages.GROUP_DISBANDED
-        else:  # new_season
-            await seasons.start_new_season(s, group)
-            text = Messages.NEW_SEASON_OPENED
+        if action != "draw":
+            text, refresh, new_event_id = await _apply(s, action, group)
+    if action == "draw":
+        await group_handlers.run_draw(update, context, group_id)
+        return
     await query.answer()
     await _edit(update, text)
+    # the join post follows the season: reopened, closed, or a new one posted
+    for event_id in refresh:
+        await refresh_join_message(context.bot, event_id)
+    if new_event_id is not None:
+        await post_join_message(context.bot, new_event_id)
     logger.info("Confirmed %s for group_id=%s by user_id=%s", action, group_id, user.id)
+
+
+async def _apply(s: AsyncSession, action: str, group: Group) -> tuple[str, list[int], int | None]:
+    """Run a confirmed reset / disband / new season: (reply, join posts to refresh, new season id)."""
+    event = await seasons.current_event(s, group.id)
+    refresh = [event.id] if event else []
+    if action == "reset":
+        return (Messages.RESET_COMPLETE if event and await seasons.reset_draw(s, event) else Messages.RESET_NOTHING), refresh, None
+    if action == "disband":
+        await seasons.disband_group(s, group)
+        return Messages.GROUP_DISBANDED, refresh, None
+    return Messages.NEW_SEASON_OPENED, refresh, (await seasons.start_new_season(s, group)).id
 
 
 async def on_removal_page(update: Update, context: ContextTypes.DEFAULT_TYPE, event_id: int, page: int) -> None:
@@ -502,8 +528,8 @@ async def on_removal_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await query.answer()
             await _edit(update, Messages.REPAIR_IMPOSSIBLE)
             return
-        notices = reassignment_notices(reassigned, group)
-        group_title, chat_id = group.title, group.telegram_chat_id
+        notices = await reassignment_notices(s, reassigned, group)
+        group_title = group.title
     logger.info("Participant removed from event_id=%s by user_id=%s (%s reassigned)", event_id, admin.id, len(reassigned))
     await query.answer()
     # the admin learns how many Santas changed, never who gives to whom
@@ -513,8 +539,7 @@ async def on_removal_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE,
     await _edit(update, done)
     if removed_telegram_id != admin.id:
         await send_dm(context.bot, removed_telegram_id, render(Messages.REMOVED_BY_ADMIN, group_name=group_title))
-    notice = Messages.PARTICIPANT_LEFT_REPAIRED if reassigned else Messages.PARTICIPANT_LEFT
-    await post(context.bot, chat_id, render(notice, name=name))
+    await refresh_join_message(context.bot, event_id)
     await deliver(context.bot, notices)
 
 
@@ -545,8 +570,14 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         case "cx":
             await query.answer()
             await _edit(update, Messages.CANCELLED)
-        case "rn" | "rw":
+        case "rn" | "rw" | "tn":
             await registration.reuse_callback(update, context, cb.kind, a[0])
+        case "ew":
+            await user.on_edit_wishlist_button(update, context)
+        case "wy":
+            await user.on_confirm_free_wishlist(update, context)
+        case "lw":
+            await user.on_leave_button(update, context)
         case "lq":
             await user.on_leave_pick(update, context, a[0])
         case "lv":
@@ -557,5 +588,9 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await on_removal_pick(update, context, a[0], a[1])
         case "px":
             await on_removal_confirm(update, context, a[0], a[1])
+        case "ms":
+            await chat_handlers.on_compose(update, context, a[0])
+        case "mx":
+            await chat_handlers.on_cancel(update, context)
         case _:
             await query.answer()
