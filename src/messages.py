@@ -10,17 +10,21 @@ class Messages:
     # The join post: one group message, edited as people join and leave
     JOIN_POST = """🎅 Сани заправлены, олени готовы! (готовы же?)
 
-Тайный Санта в группе <b>{group_name}</b>. Жми кнопку — регистрация в личке с ботом, займёт минуту.
+Тайный Санта в группе <b>{group_name}</b>. Жми кнопку — регистрация в личке с ботом, займёт минуту.{deadline}
 
 <b>Участвуют ({count}):</b> {names}"""
     JOIN_POST_DRAWN = """🎅 Тайный Санта в группе <b>{group_name}</b> — распределение уже прошло, задания у всех в личке.
 
-Ещё не с нами? Жми кнопку — впишу тебя в цепочку.
+Ещё не с нами? Жми кнопку — впишу тебя в цепочку.{deadline}
 
 <b>Участвуют ({count}):</b> {names}"""
     JOIN_POST_CLOSED = """🎅 Этот сезон Тайного Санты в группе <b>{group_name}</b> закрыт.
 
 <b>Участвовали ({count}):</b> {names}"""
+    JOIN_POST_DEADLINE = "\n⏰ Регистрация открыта до <b>{deadline}</b>."
+    JOIN_POST_REGISTRATION_OVER = """🎅 Тайный Санта в группе <b>{group_name}</b> — регистрация закрыта.
+
+<b>Участвуют ({count}):</b> {names}"""
     JOIN_POST_MOVED = "🎅 Актуальная кнопка для участия — в сообщении ниже 👇"
     JOIN_POST_NOBODY = "пока никого — будь первым!"
     JOIN_POST_MORE = " и ещё {count}"
@@ -35,6 +39,19 @@ class Messages:
 ⏳ Начали регистрацию, но не закончили: {names}. Можно подождать их — или запустить сейчас: они смогут присоединиться и после распределения."""
     DRAW_START_BUTTON = "🎅 Запустить"
     DRAW_STALE = "Распределение уже прошло."
+
+    # Joining deadline (/deadline in the group)
+    DEADLINE_SET = "⏰ Регистрация открыта до <b>{deadline}</b>. После этого новые участники не смогут присоединиться."
+    DEADLINE_REMOVED = "✓ Дедлайн убран: регистрация открыта до конца сезона."
+    DEADLINE_CURRENT = "⏰ Регистрация открыта до <b>{deadline}</b>.\n\n{usage}"
+    DEADLINE_NONE = "Дедлайна нет: регистрация открыта до конца сезона.\n\n{usage}"
+    DEADLINE_PASSED_ADMIN = """⏰ Регистрация в <b>{group_name}</b> закрыта. Участников: {count}.{unfinished}
+
+Запускай распределение: /kickitoff в группе."""
+    DEADLINE_PASSED_GROUP = "⏰ Регистрация закрыта, участников: {count}. Админ, запускай распределение: /kickitoff"
+    DEADLINE_PASSED_UNFINISHED = "\nНе закончили регистрацию (ещё могут успеть): {names}."
+    DRAW_DEADLINE_NOTE = "\n\n⏰ Регистрация открыта до {deadline}: кто присоединится позже, получит задание сразу."
+    JOIN_CLOSED_DEADLINE = "⏰ Регистрация в группе <b>{group_name}</b> закрыта ({deadline}). Если очень хочется — попроси админа продлить её."
 
     # The bot was added to a group
     BOT_ADDED = """Привет! Я помогу провести Тайного Санту 🎅
@@ -139,11 +156,12 @@ class Messages:
 
 Чтобы участвовать, нажми «Участвовать» в группе (или напиши там /join)."""
 
-    REGISTERED_HELP = """🎅 Я на связи! Посмотреть задание — /status.
+    REGISTERED_HELP = """🎅 Я на связи! Посмотреть задание — /status (там же после распределения можно написать Санте или получателю).
 Чтобы поменять вишлист, просто пришли новый текст."""
 
     CONFIRM_FREE_WISHLIST = """Обновить вишлист на это?
 <blockquote>{wishlist}</blockquote>"""
+    CONFIRM_FREE_WISHLIST_CHAT_HINT = "\n\nЭто сообщение Санте или получателю? Тогда «Нет» и кнопка «✉️ Написать…» в /status."
     CONFIRM_FREE_WISHLIST_YES = "Да, обновить"
     CONFIRM_FREE_WISHLIST_NO = "Нет"
 
@@ -192,16 +210,40 @@ class Messages:
 <b>Вишлист:</b>
 <blockquote>{receiver_wishlist}</blockquote>
 
-Счастливого дарения! 🎅"""
+Счастливого дарения! 🎅{chat_hint}"""
 
     REASSIGNMENT_NOTIFICATION = """🔄 Небольшая перестановка в группе <b>{group_name}</b>: состав участников изменился, и у тебя новое задание.
 Прошлое больше не действует.
 
 Получает: <b>{receiver_name}</b>
 <b>Вишлист:</b>
-<blockquote>{receiver_wishlist}</blockquote>"""
+<blockquote>{receiver_wishlist}</blockquote>{chat_hint}"""
 
     EMPTY_WISHLIST = "Не указан"
+
+    # Anonymous messages: Santa <-> receiver, one message per tap, text only
+    CHAT_HINT = "\n\n✉️ Кнопками ниже можно анонимно написать получателю (спросить размер, цвет…) или своему Тайному Санте."
+    CHAT_TO_RECEIVER_BUTTON = "✉️ Написать получателю"
+    CHAT_TO_SANTA_BUTTON = "✉️ Написать своему Санте"
+    CHAT_TO_RECEIVER_IN_GROUP_BUTTON = "✉️ Получателю · {group_name}"
+    CHAT_TO_SANTA_IN_GROUP_BUTTON = "✉️ Санте · {group_name}"
+    CHAT_REPLY_BUTTON = "↩️ Ответить"
+    CHAT_CANCEL_BUTTON = "Отмена"
+    CHAT_COMPOSE_TO_RECEIVER = """✉️ Напиши сообщение для <b>{name}</b> (группа <b>{group_name}</b>). Я передам его от Тайного Санты — кто ты, не узнают.
+
+Одно сообщение, только текст."""
+    CHAT_COMPOSE_TO_SANTA = """✉️ Напиши сообщение своему Тайному Санте (группа <b>{group_name}</b>). Санта знает, кому дарит, а ты его — нет 😉
+
+Одно сообщение, только текст."""
+    CHAT_FROM_SANTA = """🎅 <b>Тебе пишет твой Тайный Санта</b> (группа <b>{group_name}</b>):
+
+<blockquote>{text}</blockquote>"""
+    CHAT_FROM_RECEIVER = """💌 <b>Пишет {name}</b> — тот, кому ты даришь (группа <b>{group_name}</b>):
+
+<blockquote>{text}</blockquote>"""
+    CHAT_SENT = "✓ Отправлено. Ответ придёт сюда же."
+    CHAT_NOT_DELIVERED = "Не получилось доставить: похоже, человек закрыл личку с ботом. Попробуй позже."
+    CHAT_STALE = "Этот диалог больше не действует: распределение поменялось или сезон закончился."
 
     # --- leaving ----------------------------------------------------------------
     LEAVE_PICK_GROUP = "Из какой группы выйти?"
@@ -310,6 +352,7 @@ class Messages:
 <b>В группе:</b>
 /start - Активировать бота
 /kickitoff - Запустить распределение (с подтверждением)
+/deadline 30.11 18:00 - Дедлайн регистрации (/deadline off — убрать)
 /newseason - Закрыть сезон и открыть новый"""
 
     STALE_BUTTON = "Эта кнопка устарела."

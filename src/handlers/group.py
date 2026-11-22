@@ -3,21 +3,21 @@ the greeting when the bot is added, chat migration"""
 
 import logging
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import Forbidden, TelegramError
 from telegram.ext import ContextTypes
 
-from ..database.models import EventStatus
+from .. import clock
+from ..database.models import Event, EventStatus, Group
 from ..database.session import session_scope
 from ..formatting import Safe, join, render, truncate
 from ..messages import Messages
-from ..services import seasons, state
+from ..services import deadlines, seasons, state
 from ..services.assignment import ImpossibleDraw, NotEnoughParticipants
 from ..services.join_post import join_link, post_join_message, refresh_join_message
-from ..services.notifications import assignment_text, post, send_dm
+from ..services.notifications import assignment_markup, assignment_text, post, send_dm
 from ..utils.auth import is_group_admin, require_group_chat
-from ..validation import CONFIRM_CODES, callback
+from ..validation import CONFIRM_CODES, DEADLINE_USAGE, ValidationError, callback, parse_deadline
 from .registration import already_in, name_prompt
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,8 @@ async def join_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         existing = await seasons.find_participant(s, event.id, user.id)
         if existing is not None:
             text, markup = already_in(group, existing)
+        elif seasons.joining_closed(event):
+            text, markup = closed_by_deadline(group, event), None
         else:
             await state.set_flow(s, user.id, state.REG_NAME, event_id=event.id, tg_name=truncate(user.full_name, 40))
             text, markup = await name_prompt(s, group, event, user)
@@ -72,6 +74,9 @@ async def join_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         await context.bot.send_message(chat_id=user.id, text=text, reply_markup=markup)
     except Forbidden:
+        if markup is None:  # nothing to continue in DM: say it here
+            await _reply(update, text)
+            return
         # The user never opened a DM with the bot (or blocked it). The deep
         # link opens it and resumes registration via /start join_<event_id>.
         button = InlineKeyboardMarkup(
@@ -112,10 +117,12 @@ async def kickitoff_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         except ImpossibleDraw:
             await _reply(update, Messages.ERROR_ASSIGNMENT_IMPOSSIBLE)
             return
-        unfinished = await unfinished_names(s, event.id)
-        group_id = group.id
+        unfinished = await seasons.unfinished_names(s, event.id)
+        group_id, deadline = group.id, event.join_deadline
 
-    note = render(Messages.DRAW_UNFINISHED, names=join(unfinished, sep=", ")) if unfinished else ""
+    note = render(Messages.DRAW_UNFINISHED, names=join(unfinished, sep=", ")) if unfinished else Safe("")
+    if deadline is not None and not seasons.joining_closed(event):
+        note = Safe(note + render(Messages.DRAW_DEADLINE_NOTE, deadline=clock.show(deadline)))
     markup = InlineKeyboardMarkup(
         [[
             InlineKeyboardButton(Messages.DRAW_START_BUTTON, callback_data=callback("cf", CONFIRM_CODES["draw"], group_id)),
@@ -123,13 +130,6 @@ async def kickitoff_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         ]]
     )
     await _reply(update, render(Messages.DRAW_CONFIRM, count=len(pairs), unfinished=Safe(note)), markup)
-
-
-async def unfinished_names(s: AsyncSession, event_id: int) -> list[str]:
-    """Names of people who started registering for the event but haven't finished."""
-    pending = await state.unfinished_registrations(s, event_id)
-    joined = {p.telegram_id for p in await seasons.participants(s, event_id)}
-    return sorted(truncate(name, 40) for telegram_id, name in pending.items() if telegram_id not in joined)
 
 
 async def run_draw(update: Update, context: ContextTypes.DEFAULT_TYPE, group_id: int) -> None:
@@ -156,15 +156,19 @@ async def run_draw(update: Update, context: ContextTypes.DEFAULT_TYPE, group_id:
             await query.answer()
             await _edit(update, Messages.ERROR_ASSIGNMENT_IMPOSSIBLE)
             return
-        deliveries = [(a.id, a.giver.telegram_id, a.giver.real_name, assignment_text(a.receiver, group.title)) for a in rows]
+        santa_of = {a.receiver_id: a.id for a in rows}
+        deliveries = [
+            (a.id, a.giver.telegram_id, a.giver.real_name, assignment_text(a.receiver, group.title), assignment_markup(a.id, santa_of.get(a.giver_id)))
+            for a in rows
+        ]
         event_id, chat_id = event.id, group.telegram_chat_id
     await query.answer()
 
     # The draw is committed before any DM goes out: a crash mid-way can't
     # leave half the group with assignments that are not in the database.
     delivered, failed_names = [], []
-    for assignment_id, telegram_id, name, text in deliveries:
-        if await send_dm(context.bot, telegram_id, text):
+    for assignment_id, telegram_id, name, text, markup in deliveries:
+        if await send_dm(context.bot, telegram_id, text, markup):
             delivered.append(assignment_id)
         else:
             failed_names.append(name)
@@ -204,6 +208,63 @@ async def bot_added(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info("Group activated on add chat_id=%s", chat.id)
     await post(context.bot, chat.id, Safe(Messages.BOT_ADDED_BY_ADMIN))
     await post_join_message(context.bot, event_id)
+
+
+_DEADLINE_OFF = {"off", "нет", "убрать", "-"}
+
+
+def closed_by_deadline(group: Group, event: Event) -> Safe:
+    assert event.join_deadline is not None
+    return render(Messages.JOIN_CLOSED_DEADLINE, group_name=group.title, deadline=clock.show(event.join_deadline))
+
+
+@require_group_chat
+async def deadline_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/deadline 30.11 [18:00] sets the joining deadline, /deadline off removes
+    it, /deadline alone shows it. Admins only; the join post follows."""
+    chat, user, message = update.effective_chat, update.effective_user, update.effective_message
+    assert chat is not None and message is not None
+    if not await is_group_admin(update, context):
+        await _reply(update, Messages.ERROR_ADMIN_ONLY)
+        return
+    raw = " ".join(context.args or []).strip()
+    removing = raw.lower() in _DEADLINE_OFF
+    async with session_scope() as s:
+        group = await seasons.group_by_chat(s, chat.id)
+        if group is None or not group.is_active:
+            await _reply(update, Messages.ERROR_GROUP_NOT_FOUND)
+            return
+        event = await seasons.current_event(s, group.id)
+        if event is None:
+            await _reply(update, Messages.NO_SEASON)
+            return
+        if not raw:
+            if event.join_deadline is None:
+                text = render(Messages.DEADLINE_NONE, usage=DEADLINE_USAGE)
+            elif seasons.joining_closed(event):
+                text = closed_by_deadline(group, event)
+            else:
+                text = render(Messages.DEADLINE_CURRENT, deadline=clock.show(event.join_deadline), usage=DEADLINE_USAGE)
+            await _reply(update, text)
+            return
+        if removing:
+            await deadlines.set_deadline(s, event, None, None)
+            text = Safe(Messages.DEADLINE_REMOVED)
+        else:
+            try:
+                local = parse_deadline(raw, clock.local_now())
+            except ValidationError as e:
+                await _reply(update, render(Messages.INVALID_INPUT, reason=str(e)))
+                return
+            moment = clock.to_utc(local)
+            # an anonymous admin posts as the group: nobody to DM when it passes
+            setter = user.id if user is not None and message.sender_chat is None else None
+            await deadlines.set_deadline(s, event, moment, setter)
+            text = render(Messages.DEADLINE_SET, deadline=clock.show(moment))
+        event_id = event.id
+    logger.info("Deadline for event_id=%s %s", event_id, "removed" if removing else "set")
+    await _reply(update, text)
+    await refresh_join_message(context.bot, event_id)
 
 
 @require_group_chat

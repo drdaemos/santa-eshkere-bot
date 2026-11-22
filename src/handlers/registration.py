@@ -13,6 +13,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update, Us
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
+from .. import clock
 from ..database.models import Event, EventStatus, Group, Participant
 from ..database.session import session_scope
 from ..formatting import Safe, render, truncate
@@ -103,7 +104,8 @@ async def begin(s: AsyncSession, bot: Bot, user: User, event_id: int) -> tuple[S
     """Start registration from the join button (deep link); returns the first prompt.
 
     The link can be forwarded anywhere, so membership of the group is checked
-    here; /join in the group needs no check."""
+    here; /join in the group needs no check. The joining deadline is checked
+    only here and in /join: whoever started before it may finish."""
     event, error = await _joinable_event(s, event_id)
     if event is None:
         await state.clear_flow(s, user.id)
@@ -112,6 +114,11 @@ async def begin(s: AsyncSession, bot: Bot, user: User, event_id: int) -> tuple[S
     if existing is not None:
         await state.clear_flow(s, user.id)
         return already_in(event.group, existing)
+    if seasons.joining_closed(event):
+        await state.clear_flow(s, user.id)
+        return render(
+            Messages.JOIN_CLOSED_DEADLINE, group_name=event.group.title, deadline=clock.show(event.join_deadline)
+        ), None
     if not await is_group_member(bot, event.group.telegram_chat_id, user.id):
         return render(Messages.JOIN_NOT_A_MEMBER, group_name=event.group.title), None
     await state.set_flow(s, user.id, state.REG_NAME, event_id=event.id, tg_name=truncate(user.full_name, 40))
@@ -180,7 +187,7 @@ async def _complete(s: AsyncSession, update: Update, flow: state.Flow, wishlist:
         await s.flush()
         return Step(Safe(Messages.LATE_JOIN_IMPOSSIBLE))
     logger.info("Late registration user_id=%s spliced into event_id=%s", user.id, event.id)
-    notices = reassignment_notices(reassigned, event.group, newcomer_id=participant.id)
+    notices = await reassignment_notices(s, reassigned, event.group, newcomer_id=participant.id)
     # the newcomer's own assignment arrives right after the confirmation
     notices.sort(key=lambda n: n.telegram_id != user.id)
     text = render(Messages.REGISTRATION_COMPLETE_LATE, name=name, wishlist=wishlist)

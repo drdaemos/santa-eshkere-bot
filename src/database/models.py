@@ -71,6 +71,12 @@ class Event(Base):
     join_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # digest of what that message shows now, so unchanged lists aren't re-sent
     join_message_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # joining closes at this moment (naive UTC); None = open until the season ends
+    join_deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # the admin who set it: told when it passes
+    deadline_set_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # the passing of the deadline was handled (join post closed, admin told)
+    deadline_handled: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
 
     group: Mapped[Group] = relationship(back_populates="events")
     participants: Mapped[list["Participant"]] = relationship(back_populates="event", cascade="all, delete-orphan")
@@ -157,6 +163,10 @@ class Assignment(Base):
         UniqueConstraint("event_id", "receiver_id", name="uq_assignment_receiver"),
         CheckConstraint("giver_id != receiver_id", name="ck_assignment_not_self"),
         Index("idx_assignments_event_id", "event_id"),
+        # ids are never reused (Postgres sequences don't; SQLite needs this):
+        # message buttons name an assignment, and a repaired pairing must not
+        # inherit the old one's buttons
+        {"sqlite_autoincrement": True},
     )
 
 

@@ -30,6 +30,7 @@ from .config import config
 from .database.session import close_db, init_db
 from .handlers import admin, group, user
 from .messages import Messages
+from .services import deadlines
 from .web import WEBHOOK_PATH, serve_webhook
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,10 @@ async def post_init(application: Application) -> None:
     logger.info("Database initialized")
     logger.info(f"Bot username: @{(await application.bot.get_me()).username}")
     await set_command_menus(application.bot)
+    # passed joining deadlines: close the join post, tell the admin
+    application.bot_data["deadline_checks"] = asyncio.create_task(
+        deadlines.run_checks(application.bot, config.DEADLINE_CHECK_SECONDS)
+    )
 
 
 # What Telegram shows when someone types "/" (per chat type). Participants
@@ -89,6 +94,7 @@ COMMAND_MENUS: dict[str, list[tuple[str, str]]] = {
         ("join", "Участвовать в Тайном Санте"),
         ("start", "Включить бота и показать кнопку участия"),
         ("kickitoff", "Запустить распределение"),
+        ("deadline", "Дедлайн регистрации: /deadline 30.11 18:00"),
         ("newseason", "Закрыть сезон и открыть новый"),
     ],
 }
@@ -109,6 +115,9 @@ async def set_command_menus(bot: Bot) -> None:
 
 async def post_shutdown(application: Application) -> None:
     """Cleanup on shutdown"""
+    checks = application.bot_data.pop("deadline_checks", None)
+    if checks is not None:
+        checks.cancel()
     logger.info("Closing database connections...")
     await close_db()
     logger.info("Shutdown complete")
@@ -147,6 +156,7 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("join", group.join_command))
     application.add_handler(CommandHandler("kickitoff", group.kickitoff_command))
     application.add_handler(CommandHandler("newseason", group.newseason_command))
+    application.add_handler(CommandHandler("deadline", group.deadline_command))
     application.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, group.chat_migrated))
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, group.bot_added))
 

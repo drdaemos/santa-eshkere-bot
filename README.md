@@ -7,6 +7,8 @@ A Telegram bot for organizing company Secret Santa with exclusion rules (e.g., s
 - Multi-group support - bot can be activated in multiple Telegram groups
 - Private registration via DM to keep wishlists secret
 - Exclusion rules to prevent certain pairs from being matched
+- Optional joining deadline
+- Anonymous messages between each Santa and their receiver
 - Secret Santa assignment algorithm with validation
 - Admin commands for managing groups, rules, and participants
 - All messages in Russian
@@ -76,7 +78,16 @@ The bot will start in polling mode using SQLite database for local development.
    - Send `/addrule` in DM
    - Follow the prompts to add pairs who shouldn't be matched
 
-4. **Start Secret Santa:**
+4. **Joining deadline (optional):**
+   - `/deadline 30.11 18:00` in the group (a date alone means 23:59 that
+     day; `/deadline off` removes it, `/deadline` shows it). Times are in
+     `TIMEZONE` (default Europe/Moscow). The join post shows it.
+   - From then on nobody new can start registering; people midway may finish.
+     The join post loses its button, and the admin who set the deadline gets a
+     DM with the count and who hasn't finished (in the group if they never
+     opened the bot). Setting a later date reopens joining.
+
+5. **Start Secret Santa:**
    - Once users have joined, send `/kickitoff` in the group. The bot asks
      first ("Запустить для 7 участников?") and names anyone still midway
      through registering; nothing is drawn until an admin taps "🎅 Запустить".
@@ -94,6 +105,13 @@ Participants never need a command:
    use the "✏️ Изменить вишлист" button (or `/wishlist`).
 3. **Check status:** `/status`, or tap the join button again.
 4. **Leave:** the "🚪 Выйти из игры" button (or `/leave`).
+5. **Ask or answer anonymously:** after the draw, the assignment DM and
+   `/status` have "✉️ Написать получателю" and "✉️ Написать своему Санте".
+   One tap, one text message, relayed by the bot; the other side gets it with
+   a "↩️ Ответить" button. The receiver only ever sees "Тайный Санта"; the
+   Santa sees the receiver's name (they know it anyway). Buttons of a pairing
+   that changed (someone left, the draw was reset, a new season) stop working,
+   and the bot logs neither the text nor who wrote to whom.
 
 Design rules behind this:
 - **Quiet group:** joining, leaving and changes after the draw only edit the
@@ -126,6 +144,7 @@ Telegram on every command and button press.
 ### In Group Chat
 - `/start` - Activate bot (admin only); opens a season if none is running
 - `/kickitoff` - Draw and send assignments after a confirmation (admin only; refuses to reshuffle a drawn season)
+- `/deadline 30.11 18:00` - Joining deadline (admin only; `/deadline off` removes it)
 - `/newseason` - Close the current season and open a new one (admin only, asks to confirm)
 
 ### In DM with Bot
@@ -160,6 +179,7 @@ git push origin main
    - `TELEGRAM_BOT_TOKEN` - your bot token
    - `USE_WEBHOOK` - set to `true`
    - `DATABASE_URL` - reference the Postgres service's `DATABASE_URL`
+   - `TIMEZONE` (optional) - IANA zone deadlines are typed and shown in, default `Europe/Moscow`
 5. Build, start and healthcheck settings come from [railway.toml](railway.toml):
    migrations run as the pre-deploy step, and Railway only switches traffic to
    a new deploy once `GET /health` answers 200 (bot started, webhook set,

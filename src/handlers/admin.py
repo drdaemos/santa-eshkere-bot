@@ -22,6 +22,7 @@ from ..services.join_post import post_join_message, refresh_join_message
 from ..services.notifications import deliver, reassignment_notices, send_dm
 from ..utils.auth import is_chat_admin, require_private_chat
 from ..validation import CONFIRM_ACTIONS, CONFIRM_CODES, ValidationError, callback, parse_callback, parse_index
+from . import chat as chat_handlers
 from . import group as group_handlers
 from . import registration, user
 
@@ -163,7 +164,7 @@ async def listjoined_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         group, event = selected
         people = sorted(await seasons.participants(s, event.id), key=lambda p: p.joined_at)
-        unfinished = await group_handlers.unfinished_names(s, event.id)
+        unfinished = await seasons.unfinished_names(s, event.id)
         undelivered = sorted(a.giver.real_name for a in await seasons.assignments(s, event.id) if a.delivered_at is None)
     if not people and not unfinished:
         await _reply(update, Messages.NO_PARTICIPANTS)
@@ -527,7 +528,7 @@ async def on_removal_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await query.answer()
             await _edit(update, Messages.REPAIR_IMPOSSIBLE)
             return
-        notices = reassignment_notices(reassigned, group)
+        notices = await reassignment_notices(s, reassigned, group)
         group_title = group.title
     logger.info("Participant removed from event_id=%s by user_id=%s (%s reassigned)", event_id, admin.id, len(reassigned))
     await query.answer()
@@ -587,5 +588,9 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await on_removal_pick(update, context, a[0], a[1])
         case "px":
             await on_removal_confirm(update, context, a[0], a[1])
+        case "ms":
+            await chat_handlers.on_compose(update, context, a[0])
+        case "mx":
+            await chat_handlers.on_cancel(update, context)
         case _:
             await query.answer()

@@ -13,6 +13,7 @@ import logging
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest, TelegramError
 
+from .. import clock
 from ..database.models import Event, EventStatus
 from ..database.session import session_scope
 from ..formatting import Safe, join, render, truncate
@@ -49,9 +50,12 @@ async def _content(event: Event, bot_username: str) -> tuple[Safe, InlineKeyboar
     values = {"group_name": event.group.title, "count": len(people), "names": names}
     if event.status == EventStatus.CLOSED or not event.group.is_active:
         return render(Messages.JOIN_POST_CLOSED, **values), None
+    if seasons.joining_closed(event):
+        return render(Messages.JOIN_POST_REGISTRATION_OVER, **values), None
+    deadline = render(Messages.JOIN_POST_DEADLINE, deadline=clock.show(event.join_deadline)) if event.join_deadline else ""
     template = Messages.JOIN_POST_DRAWN if event.status == EventStatus.DRAWN else Messages.JOIN_POST
     button = InlineKeyboardButton(Messages.JOIN_BUTTON, url=join_link(bot_username, event.id))
-    return render(template, **values), InlineKeyboardMarkup([[button]])
+    return render(template, deadline=deadline, **values), InlineKeyboardMarkup([[button]])
 
 
 def _digest(text: str, markup: InlineKeyboardMarkup | None) -> str:

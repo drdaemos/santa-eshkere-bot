@@ -4,6 +4,7 @@ Functions take an AsyncSession and never talk to Telegram, so handlers stay
 thin and this module can be tested without the bot.
 """
 
+import random
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -12,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
+from .. import clock
 from ..database.models import Assignment, Event, EventStatus, Exclusion, Group, Participant
+from . import state
 from .assignment import generate_assignments, repair_without, splice_in
 
 # --- groups -------------------------------------------------------------------
@@ -82,6 +85,11 @@ async def get_event(s: AsyncSession, event_id: int) -> Event | None:
     return await s.get(Event, event_id, options=[selectinload(Event.group)])
 
 
+def joining_closed(event: Event, now: datetime | None = None) -> bool:
+    """Has the season's joining deadline passed? (Deadlines are naive UTC.)"""
+    return event.join_deadline is not None and (now or clock.utcnow()) >= event.join_deadline
+
+
 async def start_new_season(s: AsyncSession, group: Group) -> Event:
     event = await current_event(s, group.id)
     if event is not None:
@@ -143,6 +151,8 @@ class Membership:
     event: Event
     group: Group
     receiver: Participant | None  # whom they give to, once drawn
+    assignment_id: int | None = None  # their own assignment (giver -> receiver)
+    santa_assignment_id: int | None = None  # the assignment where they are the receiver
 
 
 async def current_memberships(s: AsyncSession, telegram_id: int) -> list[Membership]:
@@ -156,16 +166,30 @@ async def current_memberships(s: AsyncSession, telegram_id: int) -> list[Members
     )
     memberships = []
     for participant, event, group in result.all():
-        receiver = None
         assignment = (
             await s.execute(
                 select(Assignment).options(selectinload(Assignment.receiver)).where(Assignment.giver_id == participant.id)
             )
         ).scalar_one_or_none()
-        if assignment is not None:
-            receiver = assignment.receiver
-        memberships.append(Membership(participant, event, group, receiver))
+        santa = (await santa_assignment_ids(s, [participant.id])).get(participant.id)
+        receiver = assignment.receiver if assignment is not None else None
+        memberships.append(Membership(participant, event, group, receiver, assignment.id if assignment else None, santa))
     return memberships
+
+
+async def santa_assignment_ids(s: AsyncSession, participant_ids: list[int]) -> dict[int, int]:
+    """participant id -> id of the assignment in which they are the receiver."""
+    if not participant_ids:
+        return {}
+    result = await s.execute(select(Assignment.receiver_id, Assignment.id).where(Assignment.receiver_id.in_(participant_ids)))
+    return dict(result.tuples().all())
+
+
+async def unfinished_names(s: AsyncSession, event_id: int) -> list[str]:
+    """Names of people who started registering for the event but haven't finished."""
+    pending = await state.unfinished_registrations(s, event_id)
+    joined = {p.telegram_id for p in await participants(s, event_id)}
+    return sorted(name[:40] for telegram_id, name in pending.items() if telegram_id not in joined)
 
 
 async def santas_of(s: AsyncSession, participant_ids: list[int]) -> list[tuple[Participant, Participant]]:
@@ -249,6 +273,7 @@ async def _forbidden_ids(s: AsyncSession, event: Event, people: list[Participant
 async def draw(s: AsyncSession, event: Event) -> list[Assignment]:
     """Draw and persist; the event moves to DRAWN. Caller checks event.status first."""
     pairs, _ = await plan_draw(s, event)
+    random.shuffle(pairs)  # row ids (in message buttons) say nothing about who gives to whom
     rows = [Assignment(event_id=event.id, giver_id=giver.id, receiver_id=receiver.id) for giver, receiver in pairs]
     s.add_all(rows)
     event.status = EventStatus.DRAWN

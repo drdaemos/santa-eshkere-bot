@@ -16,12 +16,13 @@ from ..database.models import EventStatus, Participant
 from ..database.session import session_scope
 from ..formatting import Safe, join, render, truncate
 from ..messages import Messages
-from ..services import seasons, state
+from ..services import chat, seasons, state
 from ..services.assignment import ImpossibleDraw, NotEnoughParticipants
 from ..services.join_post import participant_buttons, refresh_join_message
 from ..services.notifications import deliver, reassignment_notices, send_dm, wishlist_text
 from ..utils.auth import require_private_chat
 from ..validation import ValidationError, callback, clean_wishlist
+from . import chat as chat_handlers
 from . import registration
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 name=m.participant.real_name,
                 wishlist=wishlist_text(m.participant),
             )
-        await _reply(update, text, participant_buttons())
+        await _reply(update, text, _status_buttons(memberships))
         return
 
     entries = []
@@ -103,7 +104,17 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             render(Messages.STATUS_ASSIGNED, receiver_name=m.receiver.real_name) if m.receiver else Safe(Messages.STATUS_PENDING)
         )
         entries.append(render(Messages.STATUS_GROUP_ENTRY, index=index, group_name=m.group.title, status=status))
-    await _reply(update, render(Messages.STATUS_MULTIPLE_GROUPS, groups_status=join(entries, sep="\n\n")), participant_buttons())
+    await _reply(update, render(Messages.STATUS_MULTIPLE_GROUPS, groups_status=join(entries, sep="\n\n")), _status_buttons(memberships))
+
+
+def _status_buttons(memberships: list[seasons.Membership]) -> InlineKeyboardMarkup:
+    """Write to the receiver / to one's Santa (per drawn season), then edit wishlist and leave."""
+    several = len(memberships) > 1
+    rows = []
+    for m in memberships:
+        if m.assignment_id is not None or m.santa_assignment_id is not None:
+            rows += chat.chat_rows(m.assignment_id, m.santa_assignment_id, m.group.title if several else None)
+    return InlineKeyboardMarkup(rows + [list(row) for row in participant_buttons().inline_keyboard])
 
 
 # --- wishlist -------------------------------------------------------------------
@@ -189,7 +200,8 @@ async def _on_free_text(update: Update, raw: str) -> None:
         await _reply(update, Messages.REGISTERED_HELP if registered else Messages.USER_HELP)
         return
     async with session_scope() as s:
-        if not await seasons.current_memberships(s, user.id):
+        memberships = await seasons.current_memberships(s, user.id)
+        if not memberships:
             reply = (Safe(Messages.USER_HELP), None)
         else:
             try:
@@ -204,7 +216,10 @@ async def _on_free_text(update: Update, raw: str) -> None:
                         InlineKeyboardButton(Messages.CONFIRM_FREE_WISHLIST_NO, callback_data=callback("cx")),
                     ]]
                 )
-                reply = (render(Messages.CONFIRM_FREE_WISHLIST, wishlist=truncate(wishlist, 2000)), markup)
+                text = render(Messages.CONFIRM_FREE_WISHLIST, wishlist=truncate(wishlist, 2000))
+                if any(m.event.status == EventStatus.DRAWN for m in memberships):
+                    text = Safe(text + Messages.CONFIRM_FREE_WISHLIST_CHAT_HINT)
+                reply = (text, markup)
     await _reply(update, *reply)
 
 
@@ -249,6 +264,8 @@ async def dm_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await registration.send_step(context.bot, user.id, step)
     elif flow.name == state.EDIT_WISHLIST:
         await _on_edit_wishlist_text(update, context, flow, message.text)
+    elif flow.name == state.CHAT_COMPOSE:
+        await chat_handlers.on_text(update, context, flow, message.text)
     else:  # no step, or an unanswered "use this as wishlist?" (a new text replaces it)
         await _on_free_text(update, message.text)
 
@@ -345,7 +362,7 @@ async def on_leave_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, p
             await query.answer()
             await query.edit_message_text(Safe(Messages.REPAIR_IMPOSSIBLE))
             return
-        notices = reassignment_notices(reassigned, m.group)
+        notices = await reassignment_notices(s, reassigned, m.group)
     logger.info("user_id=%s left event_id=%s (%s reassigned)", user.id, event_id, len(reassigned))
     await query.answer()
     await query.edit_message_text(render(Messages.LEFT_SEASON, group_name=group_title))

@@ -11,6 +11,7 @@ Kept to a few long journeys because each test starts a process (~1-2 s).
 
 import os
 import tomllib
+from datetime import datetime, timedelta
 
 import httpx
 import pytest
@@ -68,6 +69,9 @@ async def test_full_season_over_http(make_world):
     office = world.group("Office", owner=admin)
     await admin.send(office, "/start")
     assert "Участвуют (0)" in join_post(office).text
+    deadline = datetime.now() + timedelta(days=20)  # any future date (the process uses the real clock)
+    await admin.send(office, f"/deadline {deadline:%d.%m.%Y} 18:00")
+    assert f"Регистрация открыта до {deadline:%d.%m} в 18:00" in join_post(office).text
 
     # two people open the DM first, one joins cold and uses the deep link
     names = {"Алиса": "Alice", "Борис": "Boris", "Вера": "Vera", "Глеб": "Gleb"}
@@ -104,6 +108,16 @@ async def test_full_season_over_http(make_world):
     assert received["Алиса"] != "Борис" and received["Борис"] != "Алиса"
     santa_of_vera = next(people[g] for g, r in received.items() if r == "Вера")
     assert "хочу: Вера & <книги> https://ozon.ru/a_b_c" in santa_of_vera.last_dm.text, "wishlist arrives verbatim"
+
+    # an anonymous question and its answer
+    vera = people["Вера"]
+    await santa_of_vera.click(santa_of_vera.last_dm, "Написать получателю")
+    await santa_of_vera.dm("Какой размер & цвет?")
+    question = vera.last_dm
+    assert "Тайный Санта" in question.text and "Какой размер & цвет?" in question.text
+    await vera.click(question, "Ответить")
+    await vera.dm("M, зелёный")
+    assert "M, зелёный" in santa_of_vera.last_dm.text and "Пишет Вера" in santa_of_vera.last_dm.text
 
     # live wishlist update reaches the Santa; a second draw is refused
     await people["Вера"].dm("/wishlist")

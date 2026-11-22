@@ -8,6 +8,7 @@ tg_name is the Telegram name, so organizers can see who started registering
 but never finished.
   edit_wishlist  {"participant_ids": [...]}      /wishlist was sent
   confirm_wishlist {"text"}                      free text sent: use it as the wishlist?
+  chat_compose   {"assignment_id"}               the next text goes to the Santa / receiver
 """
 
 import json
@@ -23,6 +24,7 @@ REG_NAME = "reg_name"
 REG_WISHLIST = "reg_wishlist"
 EDIT_WISHLIST = "edit_wishlist"
 CONFIRM_WISHLIST = "confirm_wishlist"
+CHAT_COMPOSE = "chat_compose"
 
 
 @dataclass
