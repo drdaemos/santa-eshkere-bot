@@ -30,7 +30,7 @@ from .config import config
 from .database.session import close_db, init_db
 from .handlers import admin, group, user
 from .messages import Messages
-from .services import deadlines
+from .services import deadlines, join_post
 from .web import WEBHOOK_PATH, serve_webhook
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,8 @@ async def post_init(application: Application) -> None:
     logger.info("Database initialized")
     logger.info(f"Bot username: @{(await application.bot.get_me()).username}")
     await set_command_menus(application.bot)
+    # how each group looks to Telegram, and join posts brought up to date
+    application.bot_data["group_check"] = asyncio.create_task(join_post.check_groups(application.bot))
     # passed joining deadlines: close the join post, tell the admin
     application.bot_data["deadline_checks"] = asyncio.create_task(
         deadlines.run_checks(application.bot, config.DEADLINE_CHECK_SECONDS)
@@ -115,9 +117,10 @@ async def set_command_menus(bot: Bot) -> None:
 
 async def post_shutdown(application: Application) -> None:
     """Cleanup on shutdown"""
-    checks = application.bot_data.pop("deadline_checks", None)
-    if checks is not None:
-        checks.cancel()
+    for name in ("deadline_checks", "group_check"):
+        task = application.bot_data.pop(name, None)
+        if task is not None:
+            task.cancel()
     logger.info("Closing database connections...")
     await close_db()
     logger.info("Shutdown complete")
