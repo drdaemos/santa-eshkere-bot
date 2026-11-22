@@ -25,13 +25,13 @@ async def test_join_post_tap_is_the_whole_onboarding(world, office):
     await alice.tap_join(group)
     prompt = alice.last_dm
     assert "имя" in prompt.text
-    await alice.click(prompt, "Как в Telegram: Alice Smith")
+    await alice.click(prompt, "👤 Alice Smith")
     assert prompt.buttons == [], "answered prompts lose their buttons, so they can't be tapped twice"
     await alice.dm("книги и настолки")
 
     done = alice.last_dm
     assert "ты в деле" in done.text and "Alice Smith" in done.text
-    assert [t for t, _ in done.buttons] == ["✏️ Изменить вишлист", "🚪 Выйти из игры"]
+    assert [t for t, _ in done.buttons] == ["✏️ Вишлист", "🚪 Выйти"]
     assert listed(join_post(group)) == ["Alice Smith"]
     assert len(group.feed) == group_messages, "joining posts nothing new in the group"
     assert_no_errors(world)
@@ -58,7 +58,7 @@ async def test_tapping_join_again_shows_your_entry_with_buttons(world, office):
     await alice.tap_join(group)
     assert "Ты уже участвуешь" in alice.last_dm.text and "книги" in alice.last_dm.text
 
-    await alice.click(alice.last_dm, "Изменить вишлист")
+    await alice.click(alice.last_dm, "✏️ Вишлист")
     await alice.dm("и пазлы")
     assert "обновлён" in alice.last_dm.text
     assert [p.wishlist for p in await db.participants_named("Алиса")] == ["книги\nи пазлы"], "added, not replaced"
@@ -80,12 +80,12 @@ async def test_free_text_after_registration_is_offered_as_wishlist(world, office
     await alice.dm("лучше подарите тёплые носки")
     offer = alice.last_dm
     assert "Что сделать с этим текстом?" in offer.text and "тёплые носки" in offer.text
-    await alice.click(offer, "Заменить вишлист")
+    await alice.click(offer, "🔁 Заменить")
     assert "обновлён" in offer.text
     assert "тёплые носки" in santa.last_dm.text, "the Santa hears about it"
 
     await alice.dm("а может и не носки")
-    await alice.click(alice.last_dm, "Ничего")
+    await alice.click(alice.last_dm, "Отмена")
     assert [p.wishlist for p in await db.participants_named("Алиса")] == ["лучше подарите тёплые носки"]
     assert_no_errors(world)
 
@@ -129,7 +129,7 @@ async def test_double_tap_on_name_button_is_harmless(world, office):
     group.add(alice)
     await alice.tap_join(group)
     prompt = alice.last_dm
-    data = next(d for t, d in prompt.buttons if "Как в Telegram" in t)
+    data = next(d for t, d in prompt.buttons if "👤" in t)
     await alice.click_data(prompt, data)
     out = await alice.click_data(prompt, data)
     assert [c.method for c in out.calls] == ["answerCallbackQuery"]

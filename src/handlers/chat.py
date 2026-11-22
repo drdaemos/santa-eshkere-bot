@@ -39,7 +39,7 @@ async def on_compose(update: Update, context: ContextTypes.DEFAULT_TYPE, assignm
         else:
             text = render(Messages.CHAT_COMPOSE_TO_SANTA, group_name=pair.group_title)
     await query.answer()
-    cancel = InlineKeyboardMarkup([[InlineKeyboardButton(Messages.CHAT_CANCEL_BUTTON, callback_data=callback("mx"))]])
+    cancel = InlineKeyboardMarkup([[InlineKeyboardButton(Messages.CANCEL_BUTTON, callback_data=callback("mx"))]])
     await context.bot.send_message(chat_id=user.id, text=text, reply_markup=cancel)
 
 

@@ -249,7 +249,7 @@ async def test_removal_picker_pages_through_a_big_group(world, office):
     group, admin, people = await setup(world, office, names, draw=False)
     await select_group(admin, group)
     await admin.dm("/removeparticipant")
-    await admin.click(admin.last_dm, "Вперёд")
+    await admin.click(admin.last_dm, "→")
     await admin.click(admin.last_dm, "Гость10")
     await admin.click(admin.last_dm, "Да")
     assert await db.participants_named("Гость10") == []
@@ -317,13 +317,13 @@ async def test_late_join_reuse_button_also_splices(world, office):
     await admin.click(group.feed[-1], "Да")
     for actor in people.values():
         await actor.send(group, "/join")
+        await actor.click(actor.last_dm, "🔁")
         await actor.click(actor.last_dm, "Как в прошлый раз")
-        await actor.click(actor.last_dm, "Оставить прошлый")
     await kick_off(admin, group)
 
     await late.send(group, "/join")
+    await late.click(late.last_dm, "🔁")
     await late.click(late.last_dm, "Как в прошлый раз")
-    await late.click(late.last_dm, "Оставить прошлый")
     assert_complete_draw(await chain_for_current(), set(NAMES[:3]) | {"Глеб"})
     assert assignment_of(late) is not None
     assert_no_errors(world)

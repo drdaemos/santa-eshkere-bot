@@ -245,7 +245,7 @@ async def _on_free_text(update: Update, raw: str) -> None:
                         [InlineKeyboardButton(Messages.CONFIRM_FREE_WISHLIST_ADD, callback_data=callback("wa"))],
                         [
                             InlineKeyboardButton(Messages.CONFIRM_FREE_WISHLIST_REPLACE, callback_data=callback("wy")),
-                            InlineKeyboardButton(Messages.CONFIRM_FREE_WISHLIST_NO, callback_data=callback("cx")),
+                            InlineKeyboardButton(Messages.CANCEL_BUTTON, callback_data=callback("cx")),
                         ],
                     ]
                 )

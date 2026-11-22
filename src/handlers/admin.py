@@ -99,10 +99,10 @@ def _people_keyboard(people: list[Participant], page: int, pick: object, nav: ob
     if pages > 1:
         nav_row = []
         if page > 0:
-            nav_row.append(InlineKeyboardButton("← Назад", callback_data=nav(page - 1)))  # type: ignore[operator]
+            nav_row.append(InlineKeyboardButton(Messages.PREV_PAGE_BUTTON, callback_data=nav(page - 1)))  # type: ignore[operator]
         nav_row.append(InlineKeyboardButton(f"· {page + 1}/{pages} ·", callback_data=callback("noop")))
         if page < pages - 1:
-            nav_row.append(InlineKeyboardButton("Вперёд →", callback_data=nav(page + 1)))  # type: ignore[operator]
+            nav_row.append(InlineKeyboardButton(Messages.NEXT_PAGE_BUTTON, callback_data=nav(page + 1)))  # type: ignore[operator]
         rows.append(nav_row)
     return InlineKeyboardMarkup(rows)
 
@@ -136,7 +136,7 @@ async def listgroups_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 )
             )
         markup = InlineKeyboardMarkup(
-            [[InlineKeyboardButton(truncate(f"✅ {g.title}", 60), callback_data=callback("sg", g.id))] for g in groups]
+            [[InlineKeyboardButton(truncate(g.title, 60), callback_data=callback("sg", g.id))] for g in groups]
         )
     await _reply(update, render(Messages.LIST_GROUPS, groups_list=join(entries, sep="\n\n")), markup)
 

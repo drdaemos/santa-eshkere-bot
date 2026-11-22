@@ -140,7 +140,7 @@ async def test_addrule_paginates_large_groups(world, office):
     await admin.dm("/addrule")
     first_page = [t for t, _ in admin.last_dm.buttons]
     assert "Участник 10" not in " ".join(first_page)
-    await admin.click(admin.last_dm, "Вперёд")
+    await admin.click(admin.last_dm, "→")
     assert any("Участник 10" in t for t, _ in admin.last_dm.buttons)
     await admin.click(admin.last_dm, "Участник 10")
     await admin.click(admin.last_dm, "Участник 00")

@@ -7,9 +7,9 @@ from src.services import state
 from tests.harness import db
 from tests.harness.scenario import assert_no_errors, assignment_of, kick_off, register
 
-ADD = "Добавить к вишлисту"
-REPLACE = "Заменить вишлист"
-UNDO = "Вернуть как было"
+ADD = "➕ Добавить"
+REPLACE = "🔁 Заменить"
+UNDO = "↩️ Вернуть"
 
 
 async def one_person(world, office, wishlist="книги"):
@@ -47,7 +47,7 @@ async def test_text_is_offered_to_add_first(world, office):
     offer = alice.last_dm
     labels = [text for text, _ in offer.buttons]
     assert ADD in labels[0], "adding is the first, main button"
-    assert any(REPLACE in label for label in labels) and "Ничего" in labels
+    assert any(REPLACE in label for label in labels) and "Отмена" in labels
 
     await alice.click(offer, ADD)
     assert await wishlist_of() == ["книги\nи настолки"]
@@ -73,7 +73,7 @@ async def test_replace_is_explicit(world, office):
 async def test_nothing_changes_nothing(world, office):
     _, _, alice = await one_person(world, office)
     await alice.dm("просто мысли вслух")
-    await alice.click(alice.last_dm, "Ничего")
+    await alice.click(alice.last_dm, "Отмена")
     assert await wishlist_of() == ["книги"]
 
 
@@ -104,7 +104,7 @@ async def test_edit_prompt_adds_by_default(world, office):
     await alice.dm("/wishlist")
     prompt = alice.last_dm
     assert "книги" in prompt.text and "допишу" in prompt.text
-    assert any("Заменить целиком" in t for t, _ in prompt.buttons)
+    assert any("🔁 Заменить всё" in t for t, _ in prompt.buttons)
     await alice.dm("и пазлы")
     assert await wishlist_of() == ["книги\nи пазлы"]
     assert any(UNDO in t for t, _ in alice.last_dm.buttons)
@@ -114,7 +114,7 @@ async def test_edit_prompt_can_switch_to_replace(world, office):
     _, _, alice = await one_person(world, office)
     await alice.dm("/wishlist")
     prompt = alice.last_dm
-    await alice.click(prompt, "Заменить целиком")
+    await alice.click(prompt, "🔁 Заменить всё")
     assert "целиком" in prompt.text and prompt.buttons == []
     await alice.dm("всё новое")
     assert await wishlist_of() == ["всё новое"]

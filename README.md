@@ -102,16 +102,15 @@ Participants never need a command:
    tap (Telegram name, or last season's) or type one, then send a wishlist.
    `/join` in the group still works.
 2. **Change the wishlist:** just send more ideas to the bot and tap
-   "➕ Добавить к вишлисту": text is added to the end, so nothing typed
-   earlier is lost. Replacing the whole list is a separate button
-   ("🔁 Заменить вишлист", or "🔁 Заменить целиком" under "✏️ Изменить
-   вишлист" / `/wishlist`). Every change shows the result with
-   "↩️ Вернуть как было", which undoes the latest change once. After the draw
+   "➕ Добавить": text is added to the end, so nothing typed earlier is
+   lost. Replacing the whole list is a separate button ("🔁 Заменить", or
+   "🔁 Заменить всё" under "✏️ Вишлист" / `/wishlist`). Every change shows
+   the result with "↩️ Вернуть", which undoes the latest change once. After the draw
    the Santa is told what was added (or gets the new list).
 3. **Check status:** `/status`, or tap the join button again.
-4. **Leave:** the "🚪 Выйти из игры" button (or `/leave`).
+4. **Leave:** the "🚪 Выйти" button (or `/leave`).
 5. **Ask or answer anonymously:** after the draw, the assignment DM and
-   `/status` have "✉️ Написать получателю" and "✉️ Написать своему Санте".
+   `/status` have "✉️ Получателю" and "✉️ Санте".
    One tap, one text message, relayed by the bot; the other side gets it with
    a "↩️ Ответить" button. The receiver only ever sees "Тайный Санта"; the
    Santa sees the receiver's name (they know it anyway). Buttons of a pairing

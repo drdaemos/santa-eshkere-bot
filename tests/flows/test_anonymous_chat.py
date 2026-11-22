@@ -8,8 +8,8 @@ import logging
 from tests.harness import db
 from tests.harness.scenario import assert_no_errors, assignment_dms, assignment_of, kick_off, register
 
-TO_RECEIVER = "Написать получателю"
-TO_SANTA = "Написать своему Санте"
+TO_RECEIVER = "✉️ Получателю"
+TO_SANTA = "✉️ Санте"
 REPLY = "Ответить"
 FROM_SANTA = "Тебе пишет твой Тайный Санта"
 
@@ -124,7 +124,7 @@ async def test_status_has_chat_buttons_after_the_draw(world, office):
     await alice.dm("/status")
     labels = [t for t, _ in alice.last_dm.buttons]
     assert any(TO_RECEIVER in t for t in labels) and any(TO_SANTA in t for t in labels)
-    assert any("Изменить вишлист" in t for t in labels), "the usual buttons stay"
+    assert any("✏️ Вишлист" in t for t in labels), "the usual buttons stay"
 
     await alice.click(alice.last_dm, TO_RECEIVER)
     await alice.dm("Привет из статуса")
