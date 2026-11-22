@@ -114,7 +114,7 @@ async def begin(s: AsyncSession, bot: Bot, user: User, event_id: int) -> tuple[S
         return already_in(event.group, existing)
     if not await is_group_member(bot, event.group.telegram_chat_id, user.id):
         return render(Messages.JOIN_NOT_A_MEMBER, group_name=event.group.title), None
-    await state.set_flow(s, user.id, state.REG_NAME, event_id=event.id)
+    await state.set_flow(s, user.id, state.REG_NAME, event_id=event.id, tg_name=truncate(user.full_name, 40))
     return await name_prompt(s, event.group, event, user)
 
 
@@ -141,7 +141,9 @@ async def on_name(s: AsyncSession, update: Update, flow: state.Flow, raw: str) -
     if event is None:
         await state.clear_flow(s, telegram_id)
         return Safe(error or Messages.ERROR_SYSTEM), None
-    await state.set_flow(s, telegram_id, state.REG_WISHLIST, event_id=event.id, name=name)
+    await state.set_flow(
+        s, telegram_id, state.REG_WISHLIST, event_id=event.id, tg_name=flow.data.get("tg_name"), name=name
+    )
     return await wishlist_prompt(s, event, telegram_id)
 
 

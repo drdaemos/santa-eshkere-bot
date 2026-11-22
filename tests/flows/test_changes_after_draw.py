@@ -15,6 +15,7 @@ from tests.harness.scenario import (
     assignment_dms,
     assignment_of,
     join_post,
+    kick_off,
     listed,
     register,
     select_group,
@@ -34,7 +35,7 @@ async def setup(world, office, names=NAMES[:4], draw=True):
         await register(actor, group, name, f"хочу подарок для {name}")
         people[name] = actor
     if draw:
-        await admin.send(group, "/kickitoff")
+        await kick_off(admin, group)
     return group, admin, people
 
 
@@ -71,7 +72,7 @@ async def test_leave_before_draw_just_removes_the_person(world, office):
 
     await people["Вера"].dm("/status")
     assert "Сначала нужно зарегистрироваться" in people["Вера"].last_dm.text
-    await admin.send(group, "/kickitoff")
+    await kick_off(admin, group)
     assert_complete_draw(await chain(), {"Алиса", "Борис", "Глеб"})
     assert_no_errors(world)
 
@@ -130,7 +131,7 @@ async def test_leave_is_refused_when_rules_allow_no_small_repair(world, office):
     await admin.dm("/addrule")
     await admin.click(admin.last_dm, "Алиса")
     await admin.click(admin.last_dm, "Вера")
-    await admin.send(group, "/kickitoff")
+    await kick_off(admin, group)
     before = await chain()
 
     out = await leave(people["Борис"])
@@ -297,7 +298,7 @@ async def test_late_joiner_with_rules_against_everyone_is_turned_away(world, off
         await admin.click(admin.last_dm, "Даша")
         await admin.click(admin.last_dm, name)
     await leave(late)
-    await admin.send(group, "/kickitoff")
+    await kick_off(admin, group)
     before = await chain()
 
     await register(late, group, "Даша", "варежки")
@@ -318,7 +319,7 @@ async def test_late_join_reuse_button_also_splices(world, office):
         await actor.send(group, "/join")
         await actor.click(actor.last_dm, "Как в прошлый раз")
         await actor.click(actor.last_dm, "Оставить прошлый")
-    await admin.send(group, "/kickitoff")
+    await kick_off(admin, group)
 
     await late.send(group, "/join")
     await late.click(late.last_dm, "Как в прошлый раз")

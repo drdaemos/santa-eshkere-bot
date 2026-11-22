@@ -17,7 +17,7 @@ import pytest
 
 from src.main import webhook_secret
 from tests.harness.process import ROOT, ProcessHarness
-from tests.harness.scenario import TEST_TOKEN, World, assignment_of, join_post, listed, register
+from tests.harness.scenario import TEST_TOKEN, World, assignment_of, join_post, kick_off, listed, register
 
 pytestmark = pytest.mark.e2e
 
@@ -97,7 +97,7 @@ async def test_full_season_over_http(make_world):
     assert "(4)" in admin.last_dm.text
 
     # draw
-    await admin.send(office, "/kickitoff")
+    await kick_off(admin, office)
     received = {name: assignment_of(actor) for name, actor in people.items()}
     assert sorted(received.values()) == sorted(people)
     assert all(giver != receiver for giver, receiver in received.items())
@@ -109,7 +109,7 @@ async def test_full_season_over_http(make_world):
     await people["Вера"].dm("/wishlist")
     await people["Вера"].dm("передумала: варежки")
     assert "варежки" in santa_of_vera.last_dm.text
-    await admin.send(office, "/kickitoff")
+    await kick_off(admin, office)
     assert "уже сделано" in office.feed[-1].text
 
     # a latecomer is spliced into the chain; then someone drops out

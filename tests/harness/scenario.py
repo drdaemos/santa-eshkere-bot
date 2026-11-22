@@ -24,7 +24,9 @@ from telegram.ext import Application, ContextTypes
 
 from src.main import build_application
 
-from .fake_bot_api import ApiCall, FakeBotAPI, FakeGroup, FakeUser, SentMessage
+from .fake_bot_api import BOT_ID, BOT_USERNAME, ApiCall, FakeBotAPI, FakeGroup, FakeUser, SentMessage
+
+BOT_USER = {"id": BOT_ID, "is_bot": True, "first_name": "Santa", "username": BOT_USERNAME}
 
 TEST_TOKEN = "123456789:TEST-fake-token-for-the-in-process-bot-api"
 
@@ -208,6 +210,17 @@ class Group:
     def demote(self, actor: Actor) -> None:
         self.chat.members[actor.id] = "member"
 
+    async def add_bot(self, by: Actor) -> Outcome:
+        """`by` adds the bot to this group: Telegram sends a new_chat_members service message."""
+        message = {
+            "message_id": self.world.harness.next_message_id(),
+            "date": int(time.time()),
+            "chat": self.chat.to_dict(),
+            "from": by.user.to_dict(),
+            "new_chat_members": [BOT_USER],
+        }
+        return await self.world.harness.feed({"message": message})
+
     @property
     def feed(self) -> list[SentMessage]:
         """Bot messages posted in this group, oldest first."""
@@ -245,6 +258,19 @@ async def register(actor: Actor, group: Group, name: str, wishlist: str) -> None
     await actor.send(group, "/join")
     await actor.dm(name)
     await actor.dm(wishlist)
+
+
+DRAW_START_BUTTON = "Запустить"
+
+
+async def kick_off(admin: Actor, group: Group) -> Outcome:
+    """How an organizer runs the draw: /kickitoff, then confirm. Returns the
+    confirmation's outcome, or the command's when the bot refused up front."""
+    out = await admin.send(group, "/kickitoff")
+    prompt = group.feed[-1] if group.feed else None
+    if prompt is None or not any(DRAW_START_BUTTON in text for text, _ in prompt.buttons):
+        return out
+    return await admin.click(prompt, DRAW_START_BUTTON)
 
 
 async def select_group(admin: Actor, group: Group) -> None:

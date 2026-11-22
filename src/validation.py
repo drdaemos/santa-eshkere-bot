@@ -88,7 +88,7 @@ _CALLBACK_SHAPES: dict[str, int] = {
     "noop": 0,
 }
 
-CONFIRM_ACTIONS = {1: "reset", 2: "disband", 3: "new_season"}
+CONFIRM_ACTIONS = {1: "reset", 2: "disband", 3: "new_season", 4: "draw"}
 CONFIRM_CODES = {name: code for code, name in CONFIRM_ACTIONS.items()}
 
 _INT = re.compile(r"^(0|[1-9][0-9]{0,18})$")

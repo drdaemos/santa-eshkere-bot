@@ -5,7 +5,7 @@ commands, forgiving free text, and a group chat that stays quiet.
 from src.main import COMMAND_MENUS, set_command_menus
 from src.services.join_post import refresh_join_message
 from tests.harness import db
-from tests.harness.scenario import assert_no_errors, assignment_of, join_post, listed, register, select_group
+from tests.harness.scenario import assert_no_errors, assignment_of, join_post, kick_off, listed, register, select_group
 
 
 async def started(office):
@@ -73,7 +73,7 @@ async def test_free_text_after_registration_is_offered_as_wishlist(world, office
         group.add(actor)
         await register(actor, group, name, f"вишлист {name}")
         people[name] = actor
-    await admin.send(group, "/kickitoff")
+    await kick_off(admin, group)
     alice = people["Алиса"]
     santa = next(a for a in people.values() if assignment_of(a) == "Алиса")
 
@@ -145,7 +145,7 @@ async def test_join_post_follows_the_season(world, office):
         await register(actor, group, name, "книги")
     first_post = join_post(group)
 
-    await admin.send(group, "/kickitoff")
+    await kick_off(admin, group)
     assert "распределение уже прошло" in first_post.text and listed(first_post) == list(names)
     assert join_post(group) is first_post, "still joinable, same post"
 

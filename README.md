@@ -58,14 +58,18 @@ The bot will start in polling mode using SQLite database for local development.
 ### For Group Admins
 
 1. **Activate the bot in your group:**
-   - Add the bot to your Telegram group
-   - Send `/start` in the group (admin only). The bot posts the **join post**:
-     a "🎁 Участвовать" button and the live list of who is in. Pin it if you
-     like. Sending `/start` again re-posts it at the bottom of the chat.
+   - Add the bot to your Telegram group. When an admin adds it, the season
+     opens right away and the bot posts the **join post**: a "🎁 Участвовать"
+     button and the live list of who is in. Pin it if you like. (Added by a
+     non-admin, it only says hello and asks an admin to send `/start`.)
+   - `/start` in the group (admin only) does the same by hand; sent again, it
+     re-posts the join post at the bottom of the chat.
 
 2. **Manage from DM:**
-   - Send `/listgroups` to see all active groups
-   - Send `/selectgroup 1` to select a group
+   - With a single group there is nothing to select: commands act on it.
+   - With several, `/listgroups` and tap one (or `/selectgroup 1`).
+   - `/listjoined` shows who is in, who started registering but didn't finish,
+     and (after the draw) whom the bot couldn't reach.
    - Send `/adminhelp` for all admin commands
 
 3. **Set exclusion rules (optional):**
@@ -73,8 +77,10 @@ The bot will start in polling mode using SQLite database for local development.
    - Follow the prompts to add pairs who shouldn't be matched
 
 4. **Start Secret Santa:**
-   - Once users have joined, send `/kickitoff` in the group
-   - Bot will generate assignments and DM each participant
+   - Once users have joined, send `/kickitoff` in the group. The bot asks
+     first ("Запустить для 7 участников?") and names anyone still midway
+     through registering; nothing is drawn until an admin taps "🎅 Запустить".
+   - The prompt turns into "Сани поехали" and everyone gets a DM.
 
 ### For Participants
 
@@ -119,19 +125,19 @@ Telegram on every command and button press.
 
 ### In Group Chat
 - `/start` - Activate bot (admin only); opens a season if none is running
-- `/kickitoff` - Draw and send assignments (admin only; refuses to reshuffle a drawn season)
+- `/kickitoff` - Draw and send assignments after a confirmation (admin only; refuses to reshuffle a drawn season)
 - `/newseason` - Close the current season and open a new one (admin only, asks to confirm)
 
 ### In DM with Bot
 - `/listgroups` - List all active groups
-- `/selectgroup <number>` - Select a group for management (or tap its button in `/listgroups`)
+- `/selectgroup <number>` - Select a group for management (or tap its button in `/listgroups`; not needed with one group)
 - `/addrule` - Add exclusion rule
 - `/listrules` - Show exclusion rules
 - `/removerule` - Remove an exclusion rule
-- `/listjoined` - Show all participants
+- `/listjoined` - Participants, unfinished registrations, undelivered assignments
 - `/removeparticipant` - Remove someone from the season (repairs the draw)
 - `/disband` - Deactivate the selected group
-- `/dryrunassignments` - Preview a draw without saving it
+- `/dryrunassignments` - Check a draw is possible with the current rules (pairs are never shown)
 - `/reset` - Clear this season's assignments (caution!)
 - `/adminhelp` - Show all commands
 

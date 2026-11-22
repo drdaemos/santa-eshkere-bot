@@ -148,6 +148,7 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("kickitoff", group.kickitoff_command))
     application.add_handler(CommandHandler("newseason", group.newseason_command))
     application.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, group.chat_migrated))
+    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, group.bot_added))
 
     # Participant DM
     application.add_handler(CommandHandler("start", user.start_dm, filters=private))
