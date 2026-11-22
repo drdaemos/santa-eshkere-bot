@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 os.environ["TELEGRAM_BOT_TOKEN"] = "123456789:TEST-fake-token-for-the-in-process-bot-api"
 os.environ["USE_WEBHOOK"] = "false"
 os.environ.pop("EVENT_YEAR", None)
+os.environ.pop("ADMIN_TELEGRAM_ID", None)
 
 from src.database.session import close_db, get_database_url, init_db  # noqa: E402
 from tests.harness.scenario import Group, Harness, World  # noqa: E402

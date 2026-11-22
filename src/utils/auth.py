@@ -9,6 +9,7 @@ from telegram.constants import ChatMemberStatus
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
+from ..config import config
 from ..formatting import Safe
 from ..messages import Messages
 
@@ -53,7 +54,12 @@ async def is_chat_admin(chat_id: int, user_id: int, bot: Bot) -> bool:
     Telegram only guarantees getChatMember for other users when the bot is an
     admin itself: in a supergroup (especially with hidden members) it can
     fail. The admin list stays visible to every member, so it is the fallback;
-    if both fail, the answer is no."""
+    if both fail, the answer is no.
+
+    The bot's owner(s) (ADMIN_TELEGRAM_ID) are admins everywhere: Telegram can
+    hide an admin from the bot (anonymous admins, hidden members)."""
+    if user_id in config.owner_ids():
+        return True
     status = "unknown"
     try:
         member = await bot.get_chat_member(chat_id, user_id)
