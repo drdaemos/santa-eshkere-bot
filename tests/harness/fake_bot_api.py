@@ -65,6 +65,10 @@ class FakeGroup:
     # user_id -> "creator" | "administrator" | "member" | "left" | "kicked"
     members: dict[int, str] = field(default_factory=dict)
     type: str = "supergroup"
+    # a supergroup with hidden members: a bot that isn't an admin can't look
+    # other people up (getChatMember fails), but still sees the admin list
+    hidden_members: bool = False
+    admin_list_fails: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "type": self.type, "title": self.title}
@@ -286,6 +290,8 @@ class FakeBotAPI(BaseRequest):
         user = self.users.get(user_id)
         if user is None:
             raise ApiError(400, "Bad Request: user not found")
+        if group.hidden_members and user_id != BOT_ID and group.members.get(BOT_ID) not in ("administrator", "creator"):
+            raise ApiError(400, "Bad Request: member list is inaccessible")
         status = group.members.get(user_id, "left")
         user_dict = user.to_dict()
         if status == "administrator":
@@ -295,6 +301,20 @@ class FakeBotAPI(BaseRequest):
         if status == "kicked":
             return {"status": "kicked", "user": user_dict, "until_date": 0}
         return {"status": status, "user": user_dict}
+
+    def _api_getChatAdministrators(self, params: dict[str, Any], call: ApiCall) -> list[dict[str, Any]]:
+        group = self.groups.get(int(params["chat_id"]))
+        if group is None:
+            raise ApiError(400, "Bad Request: chat not found")
+        if group.admin_list_fails:
+            raise ApiError(500, "Internal Server Error")
+        admins = []
+        for user_id, status in group.members.items():
+            user = self.users.get(user_id)
+            if user is None or status not in ("administrator", "creator"):
+                continue
+            admins.append(_admin_member(user.to_dict()) if status == "administrator" else {"status": "creator", "user": user.to_dict(), "is_anonymous": False})
+        return admins
 
     def _api_editMessageReplyMarkup(self, params: dict[str, Any], call: ApiCall) -> dict[str, Any]:
         chat_id = int(params["chat_id"])
