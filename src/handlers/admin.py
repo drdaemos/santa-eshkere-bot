@@ -16,7 +16,7 @@ from ..database.models import Event, EventStatus, Exclusion, Group, Participant
 from ..database.session import session_scope
 from ..formatting import Safe, join, render, truncate
 from ..messages import Messages
-from ..services import seasons, state
+from ..services import seasons, state, wishlists
 from ..services.assignment import ImpossibleDraw, NotEnoughParticipants
 from ..services.join_post import post_join_message, refresh_join_message
 from ..services.notifications import deliver, reassignment_notices, send_dm
@@ -575,7 +575,13 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         case "ew":
             await user.on_edit_wishlist_button(update, context)
         case "wy":
-            await user.on_confirm_free_wishlist(update, context)
+            await user.on_confirm_free_wishlist(update, context, wishlists.REPLACE)
+        case "wa":
+            await user.on_confirm_free_wishlist(update, context, wishlists.APPEND)
+        case "wm":
+            await user.on_replace_mode(update, context)
+        case "wu":
+            await user.on_undo(update, context, a[0])
         case "lw":
             await user.on_leave_button(update, context)
         case "lq":

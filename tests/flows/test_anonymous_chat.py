@@ -143,7 +143,7 @@ async def test_one_message_per_tap(world, office):
     await alice.dm("второе, не для получателя")
     assert [m.text for m in from_santa(receiver)][-1].count("первое") == 1
     assert not any("второе" in m.text for m in from_santa(receiver))
-    assert "вишлист" in alice.last_dm.text.lower(), "a stray text is offered as a wishlist, as usual"
+    assert "Что сделать с этим текстом" in alice.last_dm.text, "a stray text is offered for the wishlist, as usual"
 
 
 async def test_cancel_button_and_command(world, office):
@@ -352,6 +352,6 @@ async def test_text_typed_without_a_draft_points_to_the_buttons(world, office):
     alice = people["Алиса"]
     receiver = people[pairs(people)["Алиса"]]
     await alice.dm("Санта, какой подарок ты мне готовишь?")
-    assert "Обновить вишлист" in alice.last_dm.text and "/status" in alice.last_dm.text
+    assert "Что сделать с этим текстом" in alice.last_dm.text and "/status" in alice.last_dm.text
     assert all(from_santa(a) == [] for a in people.values())
     assert not any("какой подарок" in m.text for m in receiver.inbox), "nothing is relayed without a tap"

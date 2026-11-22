@@ -59,9 +59,9 @@ async def test_tapping_join_again_shows_your_entry_with_buttons(world, office):
     assert "Ты уже участвуешь" in alice.last_dm.text and "книги" in alice.last_dm.text
 
     await alice.click(alice.last_dm, "Изменить вишлист")
-    await alice.dm("теперь пазлы")
+    await alice.dm("и пазлы")
     assert "обновлён" in alice.last_dm.text
-    assert [p.wishlist for p in await db.participants_named("Алиса")] == ["теперь пазлы"]
+    assert [p.wishlist for p in await db.participants_named("Алиса")] == ["книги\nи пазлы"], "added, not replaced"
     assert_no_errors(world)
 
 
@@ -79,13 +79,13 @@ async def test_free_text_after_registration_is_offered_as_wishlist(world, office
 
     await alice.dm("лучше подарите тёплые носки")
     offer = alice.last_dm
-    assert "Обновить вишлист на это?" in offer.text and "тёплые носки" in offer.text
-    await alice.click(offer, "Да, обновить")
+    assert "Что сделать с этим текстом?" in offer.text and "тёплые носки" in offer.text
+    await alice.click(offer, "Заменить вишлист")
     assert "обновлён" in offer.text
     assert "тёплые носки" in santa.last_dm.text, "the Santa hears about it"
 
     await alice.dm("а может и не носки")
-    await alice.click(alice.last_dm, "Нет")
+    await alice.click(alice.last_dm, "Ничего")
     assert [p.wishlist for p in await db.participants_named("Алиса")] == ["лучше подарите тёплые носки"]
     assert_no_errors(world)
 
@@ -96,7 +96,7 @@ async def test_small_talk_gets_a_short_answer_not_a_wishlist_offer(world, office
     group.add(alice)
     await register(alice, group, "Алиса", "книги")
     await alice.dm("Спасибо!")
-    assert "Обновить вишлист" not in alice.last_dm.text
+    assert "Что сделать с этим текстом" not in alice.last_dm.text
     assert "/status" in alice.last_dm.text
 
 

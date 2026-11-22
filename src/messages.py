@@ -157,21 +157,34 @@ class Messages:
 Чтобы участвовать, нажми «Участвовать» в группе (или напиши там /join)."""
 
     REGISTERED_HELP = """🎅 Я на связи! Посмотреть задание — /status (там же после распределения можно написать Санте или получателю).
-Чтобы поменять вишлист, просто пришли новый текст."""
+Чтобы дополнить вишлист, просто пришли текст."""
 
-    CONFIRM_FREE_WISHLIST = """Обновить вишлист на это?
+    CONFIRM_FREE_WISHLIST = """Что сделать с этим текстом?
 <blockquote>{wishlist}</blockquote>"""
     CONFIRM_FREE_WISHLIST_CHAT_HINT = "\n\nЭто сообщение Санте или получателю? Тогда «Нет» и кнопка «✉️ Написать…» в /status."
-    CONFIRM_FREE_WISHLIST_YES = "Да, обновить"
-    CONFIRM_FREE_WISHLIST_NO = "Нет"
+    CONFIRM_FREE_WISHLIST_ADD = "➕ Добавить к вишлисту"
+    CONFIRM_FREE_WISHLIST_REPLACE = "🔁 Заменить вишлист"
+    CONFIRM_FREE_WISHLIST_NO = "Ничего"
 
     SHOW_CURRENT_WISHLIST = """Твой вишлист:
 <blockquote>{wishlist}</blockquote>
-Напиши новый одним сообщением (или /cancel)."""
+Пришли, что добавить, — допишу в конец. Переписать всё — кнопка ниже. (/cancel — отмена)"""
+    REPLACE_WISHLIST_BUTTON = "🔁 Заменить целиком"
+    REPLACE_WISHLIST_PROMPT = "Пришли новый вишлист целиком — старый заменю. Передумал(а) — /cancel."
 
-    WISHLIST_UPDATED = "✓ Вишлист обновлён!"
+    WISHLIST_UPDATED = """✓ Вишлист обновлён:
+<blockquote>{wishlist}</blockquote>"""
+    WISHLIST_UNCHANGED = "Вишлист и так такой 🙂"
+    UNDO_BUTTON = "↩️ Вернуть как было"
+    WISHLIST_RESTORED = """↩️ Вернул как было:
+<blockquote>{wishlist}</blockquote>"""
+    UNDO_STALE = "Возвращать нечего: вишлист с тех пор уже менялся."
 
     RECEIVER_WISHLIST_CHANGED = """✏️ {receiver_name} обновил(а) вишлист (группа <b>{group_name}</b>):
+<blockquote>{receiver_wishlist}</blockquote>"""
+    RECEIVER_WISHLIST_ADDED = """✏️ {receiver_name} дополнил(а) вишлист (группа <b>{group_name}</b>):
+➕ <blockquote>{added}</blockquote>
+Весь вишлист:
 <blockquote>{receiver_wishlist}</blockquote>"""
 
     CANCELLED = "Отменено."

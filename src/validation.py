@@ -122,7 +122,10 @@ _CALLBACK_SHAPES: dict[str, int] = {
     "rw": 1,  # registration: reuse previous wishlist: event_id
     "tn": 1,  # registration: use Telegram name: event_id
     "ew": 0,  # edit wishlist (same as /wishlist)
-    "wy": 0,  # yes, use the text just sent as the new wishlist
+    "wy": 0,  # replace the wishlist with the text just sent
+    "wa": 0,  # add the text just sent to the wishlist
+    "wm": 0,  # wishlist edit: switch from adding to replacing
+    "wu": 1,  # undo the last wishlist change: token (services.wishlists.undo_token)
     "lw": 0,  # leave (same as /leave)
     "lq": 1,  # /leave, group picked: participant_id
     "lv": 1,  # /leave confirmed: participant_id

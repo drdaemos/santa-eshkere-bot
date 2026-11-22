@@ -101,8 +101,13 @@ Participants never need a command:
    bot (Telegram shows a Start button the first time). Pick the name with one
    tap (Telegram name, or last season's) or type one, then send a wishlist.
    `/join` in the group still works.
-2. **Change the wishlist:** just send the new text to the bot and confirm, or
-   use the "✏️ Изменить вишлист" button (or `/wishlist`).
+2. **Change the wishlist:** just send more ideas to the bot and tap
+   "➕ Добавить к вишлисту": text is added to the end, so nothing typed
+   earlier is lost. Replacing the whole list is a separate button
+   ("🔁 Заменить вишлист", or "🔁 Заменить целиком" under "✏️ Изменить
+   вишлист" / `/wishlist`). Every change shows the result with
+   "↩️ Вернуть как было", which undoes the latest change once. After the draw
+   the Santa is told what was added (or gets the new list).
 3. **Check status:** `/status`, or tap the join button again.
 4. **Leave:** the "🚪 Выйти из игры" button (or `/leave`).
 5. **Ask or answer anonymously:** after the draw, the assignment DM and
