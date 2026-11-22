@@ -188,8 +188,14 @@ async def test_deleted_join_post_does_not_break_joining(world, office):
     await register(alice, group, "Алиса", "книги")
     assert "ты в деле" in alice.last_dm.text
     assert world.harness.errors == []
-    await admin.send(group, "/start")
-    assert listed(join_post(group)) == ["Алиса"]
+    fresh = join_post(group)
+    assert fresh.message_id != post.message_id, "a new post went up by itself"
+    assert listed(fresh) == ["Алиса"]
+    bob = world.user("Bob")
+    group.add(bob)
+    await register(bob, group, "Борис", "чай")
+    assert sorted(listed(join_post(group))) == ["Алиса", "Борис"]
+    assert join_post(group).message_id == fresh.message_id, "and it is edited from then on, not re-posted"
 
 
 async def test_big_group_join_post_stays_short(world, office):
