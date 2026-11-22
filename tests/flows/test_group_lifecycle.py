@@ -105,20 +105,31 @@ async def test_group_survives_supergroup_migration(world, office):
     group.add(alice)
     await register(alice, group, "Алиса", "книги")
 
+    old_post = join_post(group)
     old_id, new_id = group.chat.id, group.chat.id - 500
     old_chat = group.chat.to_dict()
-    await world.harness.feed(
-        {"message": {"message_id": 1, "date": int(time.time()), "chat": old_chat, "from": admin.user.to_dict(), "migrate_to_chat_id": new_id}}
-    )
+    # Telegram creates the supergroup first, then reports the move in both chats
     world.api.groups.pop(old_id)
     group.chat.id, group.chat.type = new_id, "supergroup"
     world.api.groups[new_id] = group.chat
     await world.harness.feed(
+        {"message": {"message_id": 1, "date": int(time.time()), "chat": old_chat, "from": admin.user.to_dict(), "migrate_to_chat_id": new_id}}
+    )
+    await world.harness.feed(
         {"message": {"message_id": 2, "date": int(time.time()), "chat": group.chat.to_dict(), "from": admin.user.to_dict(), "migrate_from_chat_id": old_id}}
     )
+
+    # the old join post can't be edited in the supergroup: a fresh one is posted there, once
+    new_posts = [m for m in group.feed if any(t == "🎁 Участвовать" for t, _ in m.buttons)]
+    assert len(new_posts) == 1 and new_posts[0].chat_id == new_id and new_posts[0] is not old_post
+    assert listed(new_posts[0]) == ["Алиса"]
 
     bob = world.user("Bob")
     group.add(bob)
     await bob.dm("/start")
     await bob.send(group, "/join")
     assert "имя" in bob.last_dm.text
+    await bob.dm("Борис")
+    await bob.dm("чай")
+    assert sorted(listed(join_post(group))) == ["Алиса", "Борис"], "the new post keeps up"
+    assert_no_errors(world)

@@ -111,7 +111,7 @@ async def _edit(bot: Bot, chat_id: int, message_id: int, text: Safe, markup: Inl
         if "not modified" in str(e).lower():
             return True
         # deleted by an admin, or the chat became a supergroup: /start posts a new one
-        logger.info("Join post %s in chat_id=%s can't be edited: %s", message_id, chat_id, e.__class__.__name__)
+        logger.info("Join post %s in chat_id=%s can't be edited: %s", message_id, chat_id, e.message)
         return False
     except TelegramError as e:
         logger.warning("Join post edit in chat_id=%s failed: %s", chat_id, e.__class__.__name__)

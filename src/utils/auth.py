@@ -54,18 +54,24 @@ async def is_chat_admin(chat_id: int, user_id: int, bot: Bot) -> bool:
     admin itself: in a supergroup (especially with hidden members) it can
     fail. The admin list stays visible to every member, so it is the fallback;
     if both fail, the answer is no."""
+    status = "unknown"
     try:
         member = await bot.get_chat_member(chat_id, user_id)
         if member.status in _ADMIN_STATUSES:
             return True
+        status = member.status
     except TelegramError as e:
-        logger.warning("Admin check in chat_id=%s failed: %s; trying the admin list", chat_id, e.__class__.__name__)
+        logger.warning("Admin check in chat_id=%s failed: %s; trying the admin list", chat_id, e.message)
     try:
         admins = await bot.get_chat_administrators(chat_id)
     except TelegramError as e:
-        logger.warning("Admin list of chat_id=%s unavailable: %s", chat_id, e.__class__.__name__)
+        logger.warning("Admin list of chat_id=%s unavailable: %s", chat_id, e.message)
         return False
-    return any(admin.user.id == user_id for admin in admins)
+    if any(admin.user.id == user_id for admin in admins):
+        return True
+    # a "no" is what people ask about ("I'm an admin but the bot doesn't see it")
+    logger.info("Not an admin: user_id=%s in chat_id=%s (status %s, %s admins listed)", user_id, chat_id, status, len(admins))
+    return False
 
 
 async def is_group_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
