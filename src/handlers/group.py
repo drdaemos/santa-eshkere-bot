@@ -304,5 +304,16 @@ async def chat_migrated(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         return
     async with session_scope() as s:
-        if await seasons.migrate_chat(s, old_id, new_id):
-            logger.info("Group migrated chat_id=%s -> %s", old_id, new_id)
+        if not await seasons.migrate_chat(s, old_id, new_id):
+            return
+        logger.info("Group migrated chat_id=%s -> %s", old_id, new_id)
+        group = await seasons.group_by_chat(s, new_id)
+        event = await seasons.current_event(s, group.id) if group is not None and group.is_active else None
+        if event is None:
+            return
+        # Messages get new ids in the supergroup, so the old join post can't be
+        # edited any more: forget it and post a fresh one there.
+        event.join_message_id = None
+        event.join_message_digest = None
+        event_id = event.id
+    await post_join_message(context.bot, event_id)

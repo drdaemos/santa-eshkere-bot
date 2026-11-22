@@ -85,3 +85,13 @@ async def test_bot_as_admin_needs_no_fallback(world, office):
     await helper.dm("/listgroups")
     assert "Office" in helper.last_dm.text
     assert not any(c.method == "getChatAdministrators" for c in world.api.calls)
+
+
+async def test_a_no_is_logged_with_what_telegram_said(world, office, caplog):
+    group, owner = office
+    await owner.send(group, "/start")
+    member = world.user("Member")
+    group.add(member)
+    caplog.set_level(logging.INFO)
+    await member.dm("/listgroups")
+    assert f"Not an admin: user_id={member.id} in chat_id={group.id} (status member, 1 admins listed)" in caplog.text

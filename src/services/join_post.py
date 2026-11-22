@@ -96,23 +96,36 @@ async def refresh_join_message(bot: Bot, event_id: int) -> None:
     digest = _digest(text, markup)
     if digest == event.join_message_digest:
         return
-    if await _edit(bot, event.group.telegram_chat_id, event.join_message_id, text, markup):
+    result = await _edit(bot, event.group.telegram_chat_id, event.join_message_id, text, markup)
+    if result == _GONE and markup is not None:
+        # Deleted, or the group became a supergroup (messages get new ids
+        # there). The post is how people join: put a new one up.
+        async with session_scope() as s:
+            stored = await seasons.get_event(s, event_id)
+            if stored is not None:
+                stored.join_message_id = None
+                stored.join_message_digest = None
+        logger.info("Join post of event_id=%s is gone; posting a new one", event_id)
+        await post_join_message(bot, event_id)
+    elif result == _EDITED:
         async with session_scope() as s:
             stored = await seasons.get_event(s, event_id)
             if stored is not None:
                 stored.join_message_digest = digest
 
 
-async def _edit(bot: Bot, chat_id: int, message_id: int, text: Safe, markup: InlineKeyboardMarkup | None) -> bool:
+_EDITED, _GONE, _FAILED = "edited", "gone", "failed"
+
+
+async def _edit(bot: Bot, chat_id: int, message_id: int, text: Safe, markup: InlineKeyboardMarkup | None) -> str:
     try:
         await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=markup)
-        return True
+        return _EDITED
     except BadRequest as e:
         if "not modified" in str(e).lower():
-            return True
-        # deleted by an admin, or the chat became a supergroup: /start posts a new one
-        logger.info("Join post %s in chat_id=%s can't be edited: %s", message_id, chat_id, e.__class__.__name__)
-        return False
+            return _EDITED
+        logger.info("Join post %s in chat_id=%s can't be edited: %s", message_id, chat_id, e.message)
+        return _GONE if "not found" in str(e).lower() else _FAILED
     except TelegramError as e:
         logger.warning("Join post edit in chat_id=%s failed: %s", chat_id, e.__class__.__name__)
-        return False
+        return _FAILED
