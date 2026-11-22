@@ -27,11 +27,23 @@ class Config:
     # How often the bot checks for passed joining deadlines
     DEADLINE_CHECK_SECONDS: int = int(os.getenv("DEADLINE_CHECK_SECONDS", "60"))
 
+    # The bot's owner(s): Telegram user ids, comma-separated. They count as an
+    # admin in every group the bot runs, whatever Telegram reports.
+    ADMIN_TELEGRAM_ID: str = os.getenv("ADMIN_TELEGRAM_ID", "")
+
     # Railway sets this in every deployment
     ON_RAILWAY: bool = bool(os.getenv("RAILWAY_ENVIRONMENT"))
 
     @classmethod
+    def owner_ids(cls) -> frozenset[int]:
+        return frozenset(int(part) for part in cls.ADMIN_TELEGRAM_ID.replace(" ", "").split(",") if part)
+
+    @classmethod
     def validate(cls) -> None:
+        try:
+            cls.owner_ids()
+        except ValueError as e:
+            raise ValueError("ADMIN_TELEGRAM_ID must be Telegram user ids separated by commas") from e
         if not cls.TELEGRAM_BOT_TOKEN:
             raise ValueError("TELEGRAM_BOT_TOKEN is required")
         if cls.USE_WEBHOOK:

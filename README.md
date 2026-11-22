@@ -144,7 +144,10 @@ everyone:
 ## Admin Commands
 
 Admins are the Telegram admins of each group; rights are re-checked with
-Telegram on every command and button press.
+Telegram on every command and button press. The bot's owner(s), set in
+`ADMIN_TELEGRAM_ID` (Telegram user ids, comma-separated), count as an admin
+in every group, even where Telegram hides them from the bot (for example an
+anonymous admin).
 
 ### In Group Chat
 - `/start` - Activate bot (admin only); opens a season if none is running
@@ -185,6 +188,7 @@ git push origin main
    - `USE_WEBHOOK` - set to `true`
    - `DATABASE_URL` - reference the Postgres service's `DATABASE_URL`
    - `TIMEZONE` (optional) - IANA zone deadlines are typed and shown in, default `Europe/Moscow`
+   - `ADMIN_TELEGRAM_ID` (optional) - the bot owner's Telegram user id(s), comma-separated: admin rights in every group
 5. Build, start and healthcheck settings come from [railway.toml](railway.toml):
    migrations run as the pre-deploy step, and Railway only switches traffic to
    a new deploy once `GET /health` answers 200 (bot started, webhook set,
