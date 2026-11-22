@@ -38,10 +38,10 @@ async def test_join_before_activation_is_refused(world, office):
     assert "Группа не найдена" in out.texts[-1]
 
 
-async def test_join_in_dm_is_refused(world):
+async def test_join_in_dm_points_to_the_join_post(world):
     alice = world.user("Alice")
     out = await alice.dm("/join")
-    assert "только в группе" in out.texts[-1]
+    assert "Участвовать" in out.texts[-1] and "только в группе" not in out.texts[-1]
 
 
 async def test_disband_blocks_joining_and_start_reactivates(world, office):

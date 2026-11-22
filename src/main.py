@@ -153,7 +153,8 @@ def register_handlers(application: Application) -> None:
 
     # Group chat
     application.add_handler(CommandHandler("start", group.start_command, filters=groups))
-    application.add_handler(CommandHandler("join", group.join_command))
+    application.add_handler(CommandHandler("join", group.join_command, filters=groups))
+    application.add_handler(CommandHandler("join", user.join_dm, filters=private))
     application.add_handler(CommandHandler("kickitoff", group.kickitoff_command))
     application.add_handler(CommandHandler("newseason", group.newseason_command))
     application.add_handler(CommandHandler("deadline", group.deadline_command))

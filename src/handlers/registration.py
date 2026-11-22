@@ -100,6 +100,22 @@ async def _joinable_event(s: AsyncSession, event_id: int) -> tuple[Event | None,
     return event, None
 
 
+async def pending_step(s: AsyncSession, user: User, event_id: int | None = None) -> tuple[Safe, Markup] | None:
+    """The person is midway through registering (for event_id, or for any
+    season): the prompt of the step they are on, saying what is left. Used
+    when they tap join or send /join again, so nothing starts over."""
+    flow = await state.get_flow(s, user.id)
+    if flow.name not in (state.REG_NAME, state.REG_WISHLIST):
+        return None
+    if event_id is not None and int(flow.data.get("event_id", 0)) != event_id:
+        return None
+    prompt = await resume_prompt(s, user, flow)
+    if prompt is None:
+        return None
+    note = Messages.CONTINUE_WISHLIST if flow.name == state.REG_WISHLIST else Messages.CONTINUE_NAME
+    return Safe(f"{note}\n\n{prompt[0]}"), prompt[1]
+
+
 async def begin(s: AsyncSession, bot: Bot, user: User, event_id: int) -> tuple[Safe, Markup]:
     """Start registration from the join button (deep link); returns the first prompt.
 
@@ -114,6 +130,9 @@ async def begin(s: AsyncSession, bot: Bot, user: User, event_id: int) -> tuple[S
     if existing is not None:
         await state.clear_flow(s, user.id)
         return already_in(event.group, existing)
+    pending = await pending_step(s, user, event.id)
+    if pending is not None:  # started already (deadline or not): carry on
+        return pending
     if seasons.joining_closed(event):
         await state.clear_flow(s, user.id)
         return render(
