@@ -229,7 +229,7 @@ async def test_removal_rechecks_admin_rights_at_confirmation(world, office):
     await admin.click(admin.last_dm, "Вера")
     group.chat.members[admin.id] = "member"  # demoted while the prompt was open
     out = await admin.click(admin.last_dm, "Да")
-    assert [c.method for c in out.calls if c.method != "getChatMember"] == ["answerCallbackQuery"]
+    assert [c.method for c in out.calls if c.method not in ("getChatMember", "getChatAdministrators")] == ["answerCallbackQuery"]
     assert len(await db.participants_named("Вера")) == 1
 
 

@@ -294,6 +294,15 @@ alembic history
 - Check that the bot is running (look for "Starting bot..." in logs)
 - For group commands, ensure you're an admin
 
+### An admin doesn't see their group (supergroups)
+
+- Telegram only guarantees a bot can look up other members when the bot is
+  an admin of the chat. In a supergroup (basic groups turn into one when, for
+  example, an admin is promoted) that lookup can fail. The bot then checks
+  the group's admin list instead, but the reliable fix is to **make the bot an
+  admin of the group** (no special rights needed).
+- Look for "Admin check in chat_id=… failed" in the logs.
+
 ### Can't send DM to users
 
 - Telegram only lets a bot DM people who opened a chat with it. On `/join`

@@ -48,12 +48,24 @@ def require_group_chat(func: Handler) -> Handler:
 
 
 async def is_chat_admin(chat_id: int, user_id: int, bot: Bot) -> bool:
-    """Is user_id currently an admin/owner of chat_id (asks Telegram, never cached)."""
+    """Is user_id currently an admin/owner of chat_id (asks Telegram, never cached).
+
+    Telegram only guarantees getChatMember for other users when the bot is an
+    admin itself: in a supergroup (especially with hidden members) it can
+    fail. The admin list stays visible to every member, so it is the fallback;
+    if both fail, the answer is no."""
     try:
         member = await bot.get_chat_member(chat_id, user_id)
-    except TelegramError:
+        if member.status in _ADMIN_STATUSES:
+            return True
+    except TelegramError as e:
+        logger.warning("Admin check in chat_id=%s failed: %s; trying the admin list", chat_id, e.__class__.__name__)
+    try:
+        admins = await bot.get_chat_administrators(chat_id)
+    except TelegramError as e:
+        logger.warning("Admin list of chat_id=%s unavailable: %s", chat_id, e.__class__.__name__)
         return False
-    return member.status in _ADMIN_STATUSES
+    return any(admin.user.id == user_id for admin in admins)
 
 
 async def is_group_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -81,4 +93,7 @@ async def is_group_member(bot: Bot, chat_id: int, user_id: int) -> bool:
         return True
     if member.status in _MEMBER_STATUSES:
         return True
-    return member.status == ChatMemberStatus.RESTRICTED and bool(getattr(member, "is_member", False))
+    if member.status == ChatMemberStatus.RESTRICTED and bool(getattr(member, "is_member", False)):
+        return True
+    logger.info("Join link refused in chat_id=%s: status %s", chat_id, member.status)
+    return False
