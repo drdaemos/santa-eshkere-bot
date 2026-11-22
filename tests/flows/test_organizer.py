@@ -39,7 +39,7 @@ async def test_cancelled_draw_changes_nothing(world, office):
     group, admin, people = await season_with(world, office)
     await admin.send(group, "/kickitoff")
     prompt = group.feed[-1]
-    await admin.click(prompt, "Нет")
+    await admin.click(prompt, "Отмена")
     assert await db.assignments() == []
     assert "Запустить" not in [text for text, _ in prompt.buttons]
 

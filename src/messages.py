@@ -64,7 +64,7 @@ class Messages:
 
     JOIN_DM_FAILED = """{name}, не могу написать тебе в личку :(
 Нажми кнопку ниже и затем «Start» — регистрация продолжится там."""
-    JOIN_DM_BUTTON = "Открыть личку с ботом"
+    JOIN_DM_BUTTON = "💬 Открыть бота"
 
     DRAW_ALREADY_DONE = """❌ Распределение в этом сезоне уже сделано — повторно перемешивать не буду.
 Если правда нужно заново: /reset в личке с ботом, потом /kickitoff."""
@@ -87,8 +87,8 @@ class Messages:
 <i>Распределение уже прошло — после регистрации я впишу тебя в цепочку, и задание придёт сразу.</i>"""
 
     ASK_NAME_BUTTONS_HINT = "\n\nНапиши имя или выбери кнопкой 👇"
-    REUSE_NAME_BUTTON = "Как в прошлый раз: {name}"
-    TELEGRAM_NAME_BUTTON = "Как в Telegram: {name}"
+    REUSE_NAME_BUTTON = "🔁 {name}"
+    TELEGRAM_NAME_BUTTON = "👤 {name}"
 
     ASK_WISHLIST = """Отлично! Теперь самое важное — вишлист (ответы "я не знаю" не принимаются).
 
@@ -105,7 +105,7 @@ class Messages:
 В прошлый раз ты писал(а):
 <blockquote>{wishlist}</blockquote>
 Можно оставить его кнопкой ниже."""
-    REUSE_WISHLIST_BUTTON = "Оставить прошлый вишлист"
+    REUSE_WISHLIST_BUTTON = "🔁 Как в прошлый раз"
 
     REGISTRATION_COMPLETE = """✓ Огонь, ты в деле!
 
@@ -132,8 +132,8 @@ class Messages:
     JOIN_NOT_A_MEMBER = """Эта кнопка — для участников группы <b>{group_name}</b>.
 Попроси добавить тебя в группу и нажми её ещё раз."""
 
-    EDIT_WISHLIST_BUTTON = "✏️ Изменить вишлист"
-    LEAVE_BUTTON = "🚪 Выйти из игры"
+    EDIT_WISHLIST_BUTTON = "✏️ Вишлист"
+    LEAVE_BUTTON = "🚪 Выйти"
 
     LATE_JOIN_IMPOSSIBLE = """❌ Распределение уже прошло, и из-за правил исключения не получается вписать тебя в цепочку.
 Напиши админу группы: он может сбросить распределение (/reset) и запустить заново."""
@@ -157,21 +157,33 @@ class Messages:
 Чтобы участвовать, нажми «Участвовать» в группе (или напиши там /join)."""
 
     REGISTERED_HELP = """🎅 Я на связи! Посмотреть задание — /status (там же после распределения можно написать Санте или получателю).
-Чтобы поменять вишлист, просто пришли новый текст."""
+Чтобы дополнить вишлист, просто пришли текст."""
 
-    CONFIRM_FREE_WISHLIST = """Обновить вишлист на это?
+    CONFIRM_FREE_WISHLIST = """Что сделать с этим текстом?
 <blockquote>{wishlist}</blockquote>"""
-    CONFIRM_FREE_WISHLIST_CHAT_HINT = "\n\nЭто сообщение Санте или получателю? Тогда «Нет» и кнопка «✉️ Написать…» в /status."
-    CONFIRM_FREE_WISHLIST_YES = "Да, обновить"
-    CONFIRM_FREE_WISHLIST_NO = "Нет"
+    CONFIRM_FREE_WISHLIST_CHAT_HINT = "\n\nЭто сообщение Санте или получателю? Тогда «Отмена» и кнопка «✉️ Санте» или «✉️ Получателю» в /status."
+    CONFIRM_FREE_WISHLIST_ADD = "➕ Добавить"
+    CONFIRM_FREE_WISHLIST_REPLACE = "🔁 Заменить"
 
     SHOW_CURRENT_WISHLIST = """Твой вишлист:
 <blockquote>{wishlist}</blockquote>
-Напиши новый одним сообщением (или /cancel)."""
+Пришли, что добавить, — допишу в конец. Переписать всё — кнопка ниже. (/cancel — отмена)"""
+    REPLACE_WISHLIST_BUTTON = "🔁 Заменить всё"
+    REPLACE_WISHLIST_PROMPT = "Пришли новый вишлист целиком — старый заменю. Передумал(а) — /cancel."
 
-    WISHLIST_UPDATED = "✓ Вишлист обновлён!"
+    WISHLIST_UPDATED = """✓ Вишлист обновлён:
+<blockquote>{wishlist}</blockquote>"""
+    WISHLIST_UNCHANGED = "Вишлист и так такой 🙂"
+    UNDO_BUTTON = "↩️ Вернуть"
+    WISHLIST_RESTORED = """↩️ Вернул как было:
+<blockquote>{wishlist}</blockquote>"""
+    UNDO_STALE = "Возвращать нечего: вишлист с тех пор уже менялся."
 
     RECEIVER_WISHLIST_CHANGED = """✏️ {receiver_name} обновил(а) вишлист (группа <b>{group_name}</b>):
+<blockquote>{receiver_wishlist}</blockquote>"""
+    RECEIVER_WISHLIST_ADDED = """✏️ {receiver_name} дополнил(а) вишлист (группа <b>{group_name}</b>):
+➕ <blockquote>{added}</blockquote>
+Весь вишлист:
 <blockquote>{receiver_wishlist}</blockquote>"""
 
     CANCELLED = "Отменено."
@@ -223,12 +235,11 @@ class Messages:
 
     # Anonymous messages: Santa <-> receiver, one message per tap, text only
     CHAT_HINT = "\n\n✉️ Кнопками ниже можно анонимно написать получателю (спросить размер, цвет…) или своему Тайному Санте."
-    CHAT_TO_RECEIVER_BUTTON = "✉️ Написать получателю"
-    CHAT_TO_SANTA_BUTTON = "✉️ Написать своему Санте"
+    CHAT_TO_RECEIVER_BUTTON = "✉️ Получателю"
+    CHAT_TO_SANTA_BUTTON = "✉️ Санте"
     CHAT_TO_RECEIVER_IN_GROUP_BUTTON = "✉️ Получателю · {group_name}"
     CHAT_TO_SANTA_IN_GROUP_BUTTON = "✉️ Санте · {group_name}"
     CHAT_REPLY_BUTTON = "↩️ Ответить"
-    CHAT_CANCEL_BUTTON = "Отмена"
     CHAT_COMPOSE_TO_RECEIVER = """✉️ Напиши сообщение для <b>{name}</b> (группа <b>{group_name}</b>). Я передам его от Тайного Санты — кто ты, не узнают.
 
 Одно сообщение, только текст."""
@@ -283,6 +294,9 @@ class Messages:
 
     CONFIRM_YES_BUTTON = "Да"
     CONFIRM_NO_BUTTON = "Нет"
+    CANCEL_BUTTON = "Отмена"
+    PREV_PAGE_BUTTON = "←"
+    NEXT_PAGE_BUTTON = "→"
 
     DISBAND_CONFIRM = "Это отметит группу <b>{group_name}</b> как расформированную. Пользователи не смогут присоединиться. Продолжить?"
     GROUP_DISBANDED = "✓ Группа расформирована. Используйте /start в той группе для повторной активации."

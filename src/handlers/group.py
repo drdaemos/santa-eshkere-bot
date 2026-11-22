@@ -126,7 +126,7 @@ async def kickitoff_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     markup = InlineKeyboardMarkup(
         [[
             InlineKeyboardButton(Messages.DRAW_START_BUTTON, callback_data=callback("cf", CONFIRM_CODES["draw"], group_id)),
-            InlineKeyboardButton(Messages.CONFIRM_NO_BUTTON, callback_data=callback("cx")),
+            InlineKeyboardButton(Messages.CANCEL_BUTTON, callback_data=callback("cx")),
         ]]
     )
     await _reply(update, render(Messages.DRAW_CONFIRM, count=len(pairs), unfinished=Safe(note)), markup)

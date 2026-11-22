@@ -1,8 +1,8 @@
 """Participant DM: /start (and the join button), /status, /wishlist, /leave, /cancel, free text.
 
 Participants should never need to remember a command: their messages carry
-buttons for the next step, and text sent outside any step is offered as a
-new wishlist.
+buttons for the next step, and text sent outside any step is offered as an
+addition to the wishlist.
 """
 
 import logging
@@ -16,7 +16,7 @@ from ..database.models import EventStatus, Participant
 from ..database.session import session_scope
 from ..formatting import Safe, join, render, truncate
 from ..messages import Messages
-from ..services import chat, seasons, state
+from ..services import chat, seasons, state, wishlists
 from ..services.assignment import ImpossibleDraw, NotEnoughParticipants
 from ..services.join_post import participant_buttons, refresh_join_message
 from ..services.notifications import deliver, reassignment_notices, send_dm, wishlist_text
@@ -118,15 +118,20 @@ def _status_buttons(memberships: list[seasons.Membership]) -> InlineKeyboardMark
 
 
 # --- wishlist -------------------------------------------------------------------
+#
+# Text adds to the wishlist unless the person picks "replace"; every change
+# can be undone once (services/wishlists.py).
 
 
-async def _wishlist_edit_prompt(s: AsyncSession, telegram_id: int) -> Safe:
+async def _wishlist_edit_prompt(s: AsyncSession, telegram_id: int) -> tuple[Safe, Markup]:
     memberships = await seasons.current_memberships(s, telegram_id)
     if not memberships:
-        return Safe(Messages.ERROR_NOT_REGISTERED)
-    await state.set_flow(s, telegram_id, state.EDIT_WISHLIST, participant_ids=[m.participant.id for m in memberships])
+        return Safe(Messages.ERROR_NOT_REGISTERED), None
+    ids = [m.participant.id for m in memberships]
+    await state.set_flow(s, telegram_id, state.EDIT_WISHLIST, participant_ids=ids, mode=wishlists.APPEND)
     current = truncate(memberships[0].participant.wishlist or Messages.EMPTY_WISHLIST, 2000)
-    return render(Messages.SHOW_CURRENT_WISHLIST, wishlist=current)
+    replace = InlineKeyboardMarkup([[InlineKeyboardButton(Messages.REPLACE_WISHLIST_BUTTON, callback_data=callback("wm"))]])
+    return render(Messages.SHOW_CURRENT_WISHLIST, wishlist=current), replace
 
 
 @require_private_chat
@@ -134,64 +139,89 @@ async def wishlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user = update.effective_user
     assert user is not None
     async with session_scope() as s:
-        text = await _wishlist_edit_prompt(s, user.id)
-    await _reply(update, text)
+        prompt = await _wishlist_edit_prompt(s, user.id)
+    await _reply(update, *prompt)
 
 
 async def on_edit_wishlist_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query, user = update.callback_query, update.effective_user
     assert query is not None and user is not None
     async with session_scope() as s:
-        text = await _wishlist_edit_prompt(s, user.id)
+        prompt = await _wishlist_edit_prompt(s, user.id)
     await query.answer()
-    await _send(context.bot, user.id, text)
+    await _send(context.bot, user.id, *prompt)
 
 
-async def _save_wishlist(bot: Bot, telegram_id: int, participant_ids: list[int], wishlist: str) -> bool:
-    """Store the wishlist on the given participations (only the user's own) and
-    tell Santas who already have this person. Returns False if nothing matched."""
+async def on_replace_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """"🔁 Заменить целиком" under the edit prompt: the next text replaces."""
+    query, user = update.callback_query, update.effective_user
+    assert query is not None and user is not None
     async with session_scope() as s:
+        flow = await state.get_flow(s, user.id)
+        if flow.name != state.EDIT_WISHLIST:
+            await query.answer(Messages.STALE_BUTTON)
+            return
+        await state.set_flow(s, user.id, state.EDIT_WISHLIST, participant_ids=flow.data.get("participant_ids", []), mode=wishlists.REPLACE)
+    await query.answer()
+    await query.edit_message_text(Safe(Messages.REPLACE_WISHLIST_PROMPT))
+
+
+def _undo_markup(token: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton(Messages.UNDO_BUTTON, callback_data=callback("wu", token))]])
+
+
+async def _tell_santas(bot: Bot, changed: list[wishlists.Changed]) -> None:
+    """Their Santa may already be shopping: tell them what changed."""
+    async with session_scope() as s:
+        by_receiver = {c.membership.participant.id: c for c in changed if c.membership.event.status == EventStatus.DRAWN}
+        santas = await seasons.santas_of(s, list(by_receiver))
+    for giver, receiver in santas:
+        c = by_receiver[receiver.id]
+        values = {"receiver_name": receiver.real_name, "group_name": c.membership.group.title, "receiver_wishlist": wishlist_text(receiver)}
+        if c.added is not None:
+            text = render(Messages.RECEIVER_WISHLIST_ADDED, added=truncate(c.added, 1500), **values)
+        else:
+            text = render(Messages.RECEIVER_WISHLIST_CHANGED, **values)
+        await send_dm(bot, giver.telegram_id, text)
+
+
+async def _change_wishlist(bot: Bot, telegram_id: int, participant_ids: list[int], text: str, mode: str) -> tuple[Safe, Markup]:
+    """Apply a change and say what the wishlist is now, with an undo button.
+    Raises ValidationError (nothing changed, the pending step stays) if
+    appending would make it too long."""
+    async with session_scope() as s:
+        changed = await wishlists.change(s, telegram_id, participant_ids, text, mode)
         await state.clear_flow(s, telegram_id)
-        memberships = {m.participant.id: m for m in await seasons.current_memberships(s, telegram_id)}
-        updated = [pid for pid in participant_ids if pid in memberships]  # never touch someone else's row
-        for pid in updated:
-            memberships[pid].participant.wishlist = wishlist
-        santas = [
-            (giver.telegram_id, memberships[receiver.id].group.title, receiver)
-            for giver, receiver in await seasons.santas_of(s, updated)
-            if memberships[receiver.id].event.status == EventStatus.DRAWN
-        ]
-    # Their Santa may already be shopping: tell them.
-    for giver_telegram_id, group_title, receiver in santas:
-        await send_dm(
-            bot,
-            giver_telegram_id,
-            render(
-                Messages.RECEIVER_WISHLIST_CHANGED,
-                receiver_name=receiver.real_name,
-                group_name=group_title,
-                receiver_wishlist=wishlist_text(receiver),
-            ),
-        )
-    return bool(updated)
+        if not changed:
+            registered = bool(await seasons.current_memberships(s, telegram_id))
+            return Safe(Messages.WISHLIST_UNCHANGED if registered else Messages.ERROR_NOT_REGISTERED), None
+        result = truncate(changed[0].membership.participant.wishlist, 2000)
+        token = wishlists.token_for(changed)
+    await _tell_santas(bot, changed)
+    return render(Messages.WISHLIST_UPDATED, wishlist=result), _undo_markup(token)
 
 
 async def _on_edit_wishlist_text(update: Update, context: ContextTypes.DEFAULT_TYPE, flow: state.Flow, raw: str) -> None:
     user = update.effective_user
     assert user is not None
     try:
-        wishlist = clean_wishlist(raw)
+        text = clean_wishlist(raw)
     except ValidationError as e:
         await _reply(update, render(Messages.INVALID_INPUT, reason=str(e)))
         return
     ids = [int(i) for i in flow.data.get("participant_ids", [])]
-    saved = await _save_wishlist(context.bot, user.id, ids, wishlist)
-    await _reply(update, Messages.WISHLIST_UPDATED if saved else Messages.ERROR_NOT_REGISTERED)
+    # edit steps started before adding existed meant "send the new one": replace
+    mode = flow.data.get("mode", wishlists.REPLACE)
+    try:
+        reply = await _change_wishlist(context.bot, user.id, ids, text, mode)
+    except ValidationError as e:
+        reply = (render(Messages.INVALID_INPUT, reason=str(e)), None)
+    await _reply(update, *reply)
 
 
 async def _on_free_text(update: Update, raw: str) -> None:
-    """Text outside any step. A registered person is probably sending a new
-    wishlist: offer it (one tap) instead of replying with a command list."""
+    """Text outside any step. A registered person is probably sending more
+    wishlist ideas: offer to add them (one tap), or to replace the wishlist."""
     user = update.effective_user
     assert user is not None
     if raw.strip().lower().strip("!.)") in _CHATTER:
@@ -211,10 +241,13 @@ async def _on_free_text(update: Update, raw: str) -> None:
             else:
                 await state.set_flow(s, user.id, state.CONFIRM_WISHLIST, text=wishlist)
                 markup = InlineKeyboardMarkup(
-                    [[
-                        InlineKeyboardButton(Messages.CONFIRM_FREE_WISHLIST_YES, callback_data=callback("wy")),
-                        InlineKeyboardButton(Messages.CONFIRM_FREE_WISHLIST_NO, callback_data=callback("cx")),
-                    ]]
+                    [
+                        [InlineKeyboardButton(Messages.CONFIRM_FREE_WISHLIST_ADD, callback_data=callback("wa"))],
+                        [
+                            InlineKeyboardButton(Messages.CONFIRM_FREE_WISHLIST_REPLACE, callback_data=callback("wy")),
+                            InlineKeyboardButton(Messages.CANCEL_BUTTON, callback_data=callback("cx")),
+                        ],
+                    ]
                 )
                 text = render(Messages.CONFIRM_FREE_WISHLIST, wishlist=truncate(wishlist, 2000))
                 if any(m.event.status == EventStatus.DRAWN for m in memberships):
@@ -223,7 +256,8 @@ async def _on_free_text(update: Update, raw: str) -> None:
     await _reply(update, *reply)
 
 
-async def on_confirm_free_wishlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def on_confirm_free_wishlist(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str) -> None:
+    """"➕ Добавить" (wa) or "🔁 Заменить" (wy) under the free-text offer."""
     query, user = update.callback_query, update.effective_user
     assert query is not None and user is not None
     async with session_scope() as s:
@@ -232,9 +266,28 @@ async def on_confirm_free_wishlist(update: Update, context: ContextTypes.DEFAULT
     if flow.name != state.CONFIRM_WISHLIST:
         await query.answer(Messages.STALE_BUTTON)
         return
+    ids = [m.participant.id for m in memberships]
+    try:
+        text, markup = await _change_wishlist(context.bot, user.id, ids, str(flow.data["text"]), mode)
+    except ValidationError as e:  # too long to add: the offer stays, "replace" still works
+        await query.answer(truncate(str(e), 200), show_alert=True)
+        return
     await query.answer()
-    saved = await _save_wishlist(context.bot, user.id, [m.participant.id for m in memberships], str(flow.data["text"]))
-    await query.edit_message_text(Safe(Messages.WISHLIST_UPDATED if saved else Messages.ERROR_NOT_REGISTERED))
+    await query.edit_message_text(text, reply_markup=markup)
+
+
+async def on_undo(update: Update, context: ContextTypes.DEFAULT_TYPE, token: int) -> None:
+    query, user = update.callback_query, update.effective_user
+    assert query is not None and user is not None
+    async with session_scope() as s:
+        restored = await wishlists.undo(s, user.id, token)
+        result = truncate(restored[0].membership.participant.wishlist, 2000) if restored else ""
+    if not restored:
+        await query.answer(Messages.UNDO_STALE, show_alert=True)
+        return
+    await query.answer()
+    await query.edit_message_text(render(Messages.WISHLIST_RESTORED, wishlist=result))
+    await _tell_santas(context.bot, restored)
 
 
 @require_private_chat

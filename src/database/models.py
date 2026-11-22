@@ -111,6 +111,8 @@ class Participant(Base):
     telegram_username: Mapped[str | None] = mapped_column(Text, nullable=True)
     real_name: Mapped[str] = mapped_column(Text, nullable=False)
     wishlist: Mapped[str] = mapped_column(Text, nullable=False)
+    # what the last change replaced, for "↩️ Вернуть как было"; None = nothing to undo
+    previous_wishlist: Mapped[str | None] = mapped_column(Text, nullable=True)
     joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     event: Mapped[Event] = relationship(back_populates="participants")

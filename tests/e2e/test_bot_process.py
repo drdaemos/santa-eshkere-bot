@@ -111,7 +111,7 @@ async def test_full_season_over_http(make_world):
 
     # an anonymous question and its answer
     vera = people["Вера"]
-    await santa_of_vera.click(santa_of_vera.last_dm, "Написать получателю")
+    await santa_of_vera.click(santa_of_vera.last_dm, "✉️ Получателю")
     await santa_of_vera.dm("Какой размер & цвет?")
     question = vera.last_dm
     assert "Тайный Санта" in question.text and "Какой размер & цвет?" in question.text
@@ -147,8 +147,8 @@ async def test_full_season_over_http(make_world):
     await admin.click(office.feed[-1], "Да")
     alice = people["Алиса"]
     await alice.send(office, "/join")
+    await alice.click(alice.last_dm, "🔁")
     await alice.click(alice.last_dm, "Как в прошлый раз")
-    await alice.click(alice.last_dm, "Оставить")
     assert "ты в деле" in alice.last_dm.text
 
     assert_clean(world, allowed_failures=("Forbidden: bot can't initiate conversation with a user",))

@@ -75,9 +75,9 @@ async def test_returning_player_reuses_name_and_wishlist_in_two_taps(world, offi
 
     alice = people["Алиса"]
     await alice.send(group, "/join")
-    await alice.click(alice.last_dm, "Как в прошлый раз")
+    await alice.click(alice.last_dm, "🔁")
     assert "вишлист Алиса" in alice.last_dm.text, "last year's wishlist is shown"
-    await alice.click(alice.last_dm, "Оставить")
+    await alice.click(alice.last_dm, "Как в прошлый раз")
     assert "ты в деле" in alice.last_dm.text
     current = (await db.events())[-1]
     mine = [p for p in await db.participants_named("Алиса") if p.event_id == current.id]
@@ -92,7 +92,7 @@ async def test_reuse_button_from_an_old_prompt_is_stale(world, office):
     await alice.send(group, "/join")
     prompt = alice.last_dm
     await alice.dm("Алиса Новая")
-    await alice.click(prompt, "Как в прошлый раз")  # flow already moved on
+    await alice.click(prompt, "🔁")  # flow already moved on
     assert "вишлист" in alice.last_dm.text and "ты в деле" not in alice.last_dm.text
 
 
