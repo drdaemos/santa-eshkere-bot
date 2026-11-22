@@ -100,7 +100,8 @@ Participants never need a command:
 1. **Join:** tap "🎁 Участвовать" on the join post. It opens the DM with the
    bot (Telegram shows a Start button the first time). Pick the name with one
    tap (Telegram name, or last season's) or type one, then send a wishlist.
-   `/join` in the group still works.
+   `/join` in the group still works. Tapping again or sending `/join` (in the
+   group or to the bot) halfway through continues where the person stopped.
 2. **Change the wishlist:** just send more ideas to the bot and tap
    "➕ Добавить": text is added to the end, so nothing typed earlier is
    lost. Replacing the whole list is a separate button ("🔁 Заменить", or

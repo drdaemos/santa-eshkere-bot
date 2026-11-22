@@ -18,7 +18,7 @@ from ..services.join_post import join_link, post_join_message, refresh_join_mess
 from ..services.notifications import assignment_markup, assignment_text, post, send_dm
 from ..utils.auth import is_group_admin, require_group_chat
 from ..validation import CONFIRM_CODES, DEADLINE_USAGE, ValidationError, callback, parse_deadline
-from .registration import already_in, name_prompt
+from .registration import already_in, name_prompt, pending_step
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +60,11 @@ async def join_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await _reply(update, Messages.NO_SEASON)
             return
         existing = await seasons.find_participant(s, event.id, user.id)
+        pending = None if existing is not None else await pending_step(s, user, event.id)
         if existing is not None:
             text, markup = already_in(group, existing)
+        elif pending is not None:  # halfway through: carry on, don't start over
+            text, markup = pending
         elif seasons.joining_closed(event):
             text, markup = closed_by_deadline(group, event), None
         else:

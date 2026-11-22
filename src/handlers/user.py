@@ -66,6 +66,21 @@ async def start_dm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _reply(update, *prompt)
 
 
+@require_private_chat
+async def join_dm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/join sent to the bot instead of the group: continue a registration in
+    progress, show the entry of someone already in, or point to the join post."""
+    user = update.effective_user
+    assert user is not None
+    async with session_scope() as s:
+        reply = await registration.pending_step(s, user)
+        if reply is None:
+            memberships = await seasons.current_memberships(s, user.id)
+            if memberships:
+                reply = registration.already_in(memberships[0].group, memberships[0].participant)
+    await _reply(update, *(reply or (Safe(Messages.JOIN_FROM_DM), None)))
+
+
 # --- /status --------------------------------------------------------------------
 
 
