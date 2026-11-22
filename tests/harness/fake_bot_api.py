@@ -287,6 +287,10 @@ class FakeBotAPI(BaseRequest):
         group = self.groups.get(chat_id)
         if group is None:
             raise ApiError(400, "Bad Request: chat not found")
+        if user_id == BOT_ID:  # the bot can always see itself
+            bot_user = {"id": BOT_ID, "is_bot": True, "first_name": "Santa", "username": BOT_USERNAME}
+            status = group.members.get(BOT_ID, "member")
+            return _admin_member(bot_user) if status == "administrator" else {"status": status, "user": bot_user}
         user = self.users.get(user_id)
         if user is None:
             raise ApiError(400, "Bad Request: user not found")
@@ -301,6 +305,12 @@ class FakeBotAPI(BaseRequest):
         if status == "kicked":
             return {"status": "kicked", "user": user_dict, "until_date": 0}
         return {"status": status, "user": user_dict}
+
+    def _api_getChat(self, params: dict[str, Any], call: ApiCall) -> dict[str, Any]:
+        group = self.groups.get(int(params["chat_id"]))
+        if group is None:
+            raise ApiError(400, "Bad Request: chat not found")
+        return {**group.to_dict(), "accent_color_id": 0, "max_reaction_count": 11, "accepted_gift_types": {"unlimited_gifts": False, "limited_gifts": False, "unique_gifts": False, "premium_subscription": False}}
 
     def _api_getChatAdministrators(self, params: dict[str, Any], call: ApiCall) -> list[dict[str, Any]]:
         group = self.groups.get(int(params["chat_id"]))

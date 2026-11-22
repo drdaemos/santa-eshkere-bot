@@ -129,3 +129,26 @@ async def _edit(bot: Bot, chat_id: int, message_id: int, text: Safe, markup: Inl
     except TelegramError as e:
         logger.warning("Join post edit in chat_id=%s failed: %s", chat_id, e.__class__.__name__)
         return _FAILED
+
+
+async def check_groups(bot: Bot) -> None:
+    """At startup: log how each active group looks to Telegram (a stale chat id
+    shows up as "chat not found"), and bring every season's join post up to
+    date. Posts that changed while the bot was down, or whose edit failed, get
+    edited; posts that are gone (deleted, or lost in a supergroup migration)
+    are posted afresh. Unchanged posts cost no API call."""
+    async with session_scope() as s:
+        rows = []
+        for group in await seasons.active_groups(s):
+            event = await seasons.current_event(s, group.id)
+            rows.append((group.id, group.telegram_chat_id, event.id if event else None))
+    for group_id, chat_id, event_id in rows:
+        try:
+            chat = await bot.get_chat(chat_id)
+            me = await bot.get_chat_member(chat_id, bot.id)
+            logger.info("Group group_id=%s chat_id=%s: %s, bot is %s", group_id, chat_id, chat.type, me.status)
+        except TelegramError as e:
+            logger.warning("Group group_id=%s chat_id=%s unreachable: %s", group_id, chat_id, e.message)
+            continue
+        if event_id is not None:
+            await refresh_join_message(bot, event_id)
